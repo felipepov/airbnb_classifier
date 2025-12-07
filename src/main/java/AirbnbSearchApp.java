@@ -1,4 +1,5 @@
 import javafx.application.Application;
+import javafx.application.HostServices;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleIntegerProperty;
@@ -12,10 +13,15 @@ import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.*;
+import javafx.scene.text.Text;
+import javafx.scene.text.TextFlow;
+import static javafx.scene.layout.Region.USE_COMPUTED_SIZE;
 import javafx.stage.Stage;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.DoublePoint;
+import org.apache.lucene.document.IntPoint;
+import org.apache.lucene.document.LatLonPoint;
 import org.apache.lucene.facet.DrillDownQuery;
 import org.apache.lucene.facet.DrillSideways;
 import org.apache.lucene.facet.FacetResult;
@@ -40,7 +46,13 @@ import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.search.highlight.Highlighter;
+import org.apache.lucene.search.highlight.QueryScorer;
+import org.apache.lucene.search.highlight.SimpleHTMLFormatter;
+import org.apache.lucene.search.highlight.SimpleSpanFragmenter;
+import org.apache.lucene.analysis.TokenStream;
 
+import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -74,13 +86,31 @@ public class AirbnbSearchApp extends Application {
         private final SimpleStringProperty neighbourhood = new SimpleStringProperty();
         private final SimpleStringProperty propertyType = new SimpleStringProperty();
         private final SimpleDoubleProperty price = new SimpleDoubleProperty();
+        private final SimpleDoubleProperty rating = new SimpleDoubleProperty();
+        private final SimpleIntegerProperty reviews = new SimpleIntegerProperty();
+        private final SimpleIntegerProperty bedrooms = new SimpleIntegerProperty();
+        private final SimpleIntegerProperty bathrooms = new SimpleIntegerProperty();
+        private final SimpleStringProperty listingUrl = new SimpleStringProperty();
+        private final SimpleStringProperty amenities = new SimpleStringProperty();
+        private final SimpleStringProperty description = new SimpleStringProperty();
+        private final SimpleStringProperty descriptionHighlighted = new SimpleStringProperty();
 
-        public PropertyResult(int id, String name, String neighbourhood, String propertyType, Double price) {
+        public PropertyResult(int id, String name, String neighbourhood, String propertyType, Double price,
+                             Double rating, Integer reviews, Integer bedrooms, Integer bathrooms, String listingUrl,
+                             String amenities, String description, String descriptionHighlighted) {
             this.id.set(id);
             this.name.set(name != null ? name : "");
             this.neighbourhood.set(neighbourhood != null ? neighbourhood : "");
             this.propertyType.set(propertyType != null ? propertyType : "");
             this.price.set(price != null ? price : 0.0);
+            this.rating.set(rating != null ? rating : 0.0);
+            this.reviews.set(reviews != null ? reviews : 0);
+            this.bedrooms.set(bedrooms != null ? bedrooms : 0);
+            this.bathrooms.set(bathrooms != null ? bathrooms : 0);
+            this.listingUrl.set(listingUrl != null ? listingUrl : "");
+            this.amenities.set(amenities != null ? amenities : "");
+            this.description.set(description != null ? description : "");
+            this.descriptionHighlighted.set(descriptionHighlighted != null ? descriptionHighlighted : description != null ? description : "");
         }
 
         public int getId() {
@@ -102,24 +132,152 @@ public class AirbnbSearchApp extends Application {
         public double getPrice() {
             return price.get();
         }
+
+        public double getRating() {
+            return rating.get();
+        }
+
+        public int getReviews() {
+            return reviews.get();
+        }
+
+        public int getBedrooms() {
+            return bedrooms.get();
+        }
+
+        public int getBathrooms() {
+            return bathrooms.get();
+        }
+
+        public String getListingUrl() {
+            return listingUrl.get();
+        }
+
+        public String getAmenities() {
+            return amenities.get();
+        }
+
+        public String getDescription() {
+            return description.get();
+        }
+
+        public String getDescriptionHighlighted() {
+            return descriptionHighlighted.get();
+        }
     }
 
     // Parámetros básicos: se podría exponer como argumento de línea de comandos
     private String indexRoot = "./index_root";
+    private static final int MAX_RESULTS = 1000; // Límite máximo de resultados a recuperar
+
+    // ========== UI Layout Constants ==========
+    private static final double ROOT_PADDING = 10.0;
+    private static final double HEADER_PADDING_BOTTOM = 10.0;
+    private static final double HEADER_SPACING = 8.0;
+    private static final double ADVANCED_SCROLL_MAX_HEIGHT = 400.0;
+    private static final double ADVANCED_CONTENT_SPACING = 10.0;
+    private static final double ADVANCED_CONTENT_PADDING = 10.0;
+    private static final double FIELD_GROUP_SPACING = 8.0;
+    private static final double SIDEBAR_SPACING = 8.0;
+    private static final double SIDEBAR_PADDING_RIGHT = 10.0;
+    private static final double SIDEBAR_PREF_WIDTH = 280.0;
+    private static final double FACETS_CONTAINER_SPACING = 6.0;
+    private static final double FACETS_CONTAINER_PADDING_TOP = 6.0;
+    private static final double STATUS_BAR_SPACING = 10.0;
+    private static final double STATUS_BAR_PADDING_TOP = 8.0;
+    private static final double SUBFACETS_BOX_SPACING = 4.0;
+    private static final double SUBFACETS_BOX_PADDING_TOP = 5.0;
+    private static final double SUBFACETS_BOX_PADDING_LEFT = 20.0;
+    private static final double CATEGORY_CONTAINER_SPACING = 4.0;
+    private static final double FACET_BOX_SPACING = 4.0;
+    private static final double PROPERTY_TYPE_BOX_SPACING = 6.0;
+
+    // ========== Scene Dimensions ==========
+    private static final double SCENE_WIDTH = 1100.0;
+    private static final double SCENE_HEIGHT = 700.0;
+
+    // ========== Column Width Constraints ==========
+    private static final double COL_NAME_MIN_WIDTH = 80.0;
+    private static final double COL_NAME_MAX_WIDTH = 400.0;
+    private static final double COL_DESCRIPTION_MIN_WIDTH = 200.0;
+    private static final double COL_DESCRIPTION_MAX_WIDTH = 600.0;
+    private static final double COL_DESCRIPTION_HEIGHT = 200.0;
+    private static final double COL_DESCRIPTION_SCROLLPANE_BORDER_SUBTRACT = 5.0;
+    private static final double COL_DESCRIPTION_TEXTFLOW_BORDER_SUBTRACT = 10.0;
+    private static final double COL_NEIGHBOURHOOD_MIN_WIDTH = 60.0;
+    private static final double COL_NEIGHBOURHOOD_MAX_WIDTH = 200.0;
+    private static final double COL_TYPE_MIN_WIDTH = 50.0;
+    private static final double COL_TYPE_MAX_WIDTH = 200.0;
+    private static final double COL_PRICE_MIN_WIDTH = 50.0;
+    private static final double COL_PRICE_MAX_WIDTH = 100.0;
+    private static final double COL_RATING_MIN_WIDTH = 50.0;
+    private static final double COL_RATING_MAX_WIDTH = 80.0;
+    private static final double COL_REVIEWS_MIN_WIDTH = 50.0;
+    private static final double COL_REVIEWS_MAX_WIDTH = 100.0;
+    private static final double COL_BEDROOMS_MIN_WIDTH = 50.0;
+    private static final double COL_BEDROOMS_MAX_WIDTH = 120.0;
+    private static final double COL_BATHROOMS_MIN_WIDTH = 40.0;
+    private static final double COL_BATHROOMS_MAX_WIDTH = 80.0;
+    private static final double COL_URL_MIN_WIDTH = 40.0;
+    private static final double COL_URL_MAX_WIDTH = 80.0;
+    private static final double COL_AMENITIES_MIN_WIDTH = 80.0;
+    private static final double COL_AMENITIES_MAX_WIDTH = 500.0;
+
+    // ========== Field Widths ==========
+    private static final double FIELD_PRICE_PREF_WIDTH = 100.0;
+
+    // ========== Font Sizes ==========
+    private static final double FONT_SIZE_HELP_TEXT = 10.0;
+    private static final double FONT_SIZE_QUERY_LABEL = 11.0;
+
+    // ========== Facet Query Limits ==========
+    private static final int FACET_DIMS_INITIAL_LIMIT = 20;
+    private static final int FACET_DIMS_ALL_LIMIT = 1000;
+
+    // ========== Numeric Query Constants ==========
+    private static final double DOUBLE_EPSILON = 0.01;
+    private static final int INT_EPSILON = 1;
+    private static final double DOUBLE_DEFAULT_MIN = 0.0;
+
+    // ========== HTML Tag Parsing Constants ==========
+    private static final int HTML_TAG_MARK_OPEN_LENGTH = 6; // "<mark>"
+    private static final int HTML_TAG_MARK_CLOSE_LENGTH = 7; // "</mark>"
+    private static final String HTML_TAG_MARK_OPEN = "<mark>";
+    private static final String HTML_TAG_MARK_CLOSE = "</mark>";
+
+    // ========== Numeric Format Constants ==========
+    private static final String FORMAT_PRICE = "%.2f";
+    private static final String FORMAT_RATING = "%.1f";
 
     // Componentes UI principales
     private TextField simpleQueryField;
     private TextField neighbourhoodField;
     private TextField minPriceField;
     private TextField maxPriceField;
+    // Campos adicionales para búsqueda avanzada (inspirados en BusquedasLucene)
+    private TextField ratingField; // review_scores_rating con operadores (>=, >, <, <=, =)
+    private TextField reviewsField; // number_of_reviews con operadores
+    private TextField bedroomsField; // bedrooms con operadores
+    private TextField bathroomsField; // bathrooms con operadores
+    private TextField amenityField; // amenity (búsqueda textual)
+    private TextField propertyTypeField; // property_type (búsqueda textual)
+    // Búsqueda geográfica
+    private TextField latField;
+    private TextField lonField;
+    private TextField radiusField;
     private Label statusLabel;
     // Contenedor para grupos de facetas (similar a la columna de filtros de un buscador web)
     private VBox facetsContainer;
     private TableView<PropertyResult> resultsTable;
+    private TableColumn<PropertyResult, String> descriptionCol;
     private final ObservableList<PropertyResult> resultsData = FXCollections.observableArrayList();
+    private HostServices hostServices;
 
     @Override
     public void start(Stage primaryStage) {
+        // Guardar referencia a HostServices para abrir URLs
+        hostServices = getHostServices();
+        
         // Permitir pasar indexRoot por argumentos JavaFX (módulo simple)
         Parameters params = getParameters();
         List<String> rawArgs = params.getRaw();
@@ -131,14 +289,14 @@ public class AirbnbSearchApp extends Application {
         }
 
         BorderPane root = new BorderPane();
-        root.setPadding(new Insets(10));
+        root.setPadding(new Insets(ROOT_PADDING));
 
         root.setTop(createSearchHeader());
         root.setLeft(createFacetSidebar());
         root.setCenter(createResultsTable());
         root.setBottom(createStatusBar());
 
-        Scene scene = new Scene(root, 1100, 700);
+        Scene scene = new Scene(root, SCENE_WIDTH, SCENE_HEIGHT);
         primaryStage.setTitle("Airbnb Lucene Search (JavaFX Prototype)");
         primaryStage.setScene(scene);
         primaryStage.show();
@@ -148,11 +306,11 @@ public class AirbnbSearchApp extends Application {
      * Crea la parte superior: búsqueda simple + búsqueda avanzada plegable.
      */
     private VBox createSearchHeader() {
-        VBox header = new VBox(8);
-        header.setPadding(new Insets(0, 0, 10, 0));
+        VBox header = new VBox(HEADER_SPACING);
+        header.setPadding(new Insets(0, 0, HEADER_PADDING_BOTTOM, 0));
 
         // Fila de búsqueda simple
-        HBox simpleRow = new HBox(8);
+        HBox simpleRow = new HBox(HEADER_SPACING);
         simpleRow.setAlignment(Pos.CENTER_LEFT);
 
         simpleQueryField = new TextField();
@@ -166,31 +324,43 @@ public class AirbnbSearchApp extends Application {
         Button clearButton = new Button("Reset");
         clearButton.setOnAction(e -> clearFiltersAndResults());
 
-        simpleRow.getChildren().addAll(new Label("Consulta:"), simpleQueryField, searchButton, clearButton);
+        CheckBox hideDescriptionCheck = new CheckBox("Ocultar Descripción");
+        hideDescriptionCheck.setSelected(false);
+        hideDescriptionCheck.setOnAction(e -> {
+            if (descriptionCol != null) {
+                descriptionCol.setVisible(!hideDescriptionCheck.isSelected());
+            }
+        });
+
+        simpleRow.getChildren().addAll(new Label("Consulta:"), simpleQueryField, searchButton, clearButton, hideDescriptionCheck);
         HBox.setHgrow(simpleQueryField, Priority.ALWAYS);
 
-        // Sección de búsqueda avanzada (muy sencilla en este prototipo)
-        GridPane advancedGrid = new GridPane();
-        advancedGrid.setHgap(8);
-        advancedGrid.setVgap(4);
-        advancedGrid.setPadding(new Insets(5, 0, 0, 0));
+        // Sección de búsqueda avanzada (inspirada en BusquedasLucene)
+        ScrollPane advancedScroll = new ScrollPane();
+        advancedScroll.setFitToWidth(true);
+        advancedScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        advancedScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        advancedScroll.setMaxHeight(ADVANCED_SCROLL_MAX_HEIGHT);
+        
+        VBox advancedContent = new VBox(ADVANCED_CONTENT_SPACING);
+        advancedContent.setPadding(new Insets(ADVANCED_CONTENT_PADDING));
+        
+        // Grupo 1: Campos de texto y categorías
+        TitledPane textGroup = new TitledPane("Campos de Texto y Categorías", createTextFieldsGroup());
+        textGroup.setExpanded(true);
+        
+        // Grupo 2: Campos numéricos con operadores
+        TitledPane numericGroup = new TitledPane("Campos Numéricos (con operadores: >=, >, <, <=, =)", createNumericFieldsGroup());
+        numericGroup.setExpanded(true);
+        
+        // Grupo 3: Búsqueda geográfica
+        TitledPane geoGroup = new TitledPane("Búsqueda Geográfica", createGeographicFieldsGroup());
+        geoGroup.setExpanded(false);
+        
+        advancedContent.getChildren().addAll(textGroup, numericGroup, geoGroup);
+        advancedScroll.setContent(advancedContent);
 
-        neighbourhoodField = new TextField();
-        neighbourhoodField.setPromptText("neighbourhood_cleansed (ej: hollywood)");
-
-        minPriceField = new TextField();
-        minPriceField.setPromptText("Precio mín.");
-        maxPriceField = new TextField();
-        maxPriceField.setPromptText("Precio máx.");
-
-        advancedGrid.add(new Label("Barrio:"), 0, 0);
-        advancedGrid.add(neighbourhoodField, 1, 0);
-        advancedGrid.add(new Label("Precio:"), 0, 1);
-        HBox priceBox = new HBox(5, minPriceField, new Label("-"), maxPriceField);
-        advancedGrid.add(priceBox, 1, 1);
-        GridPane.setHgrow(neighbourhoodField, Priority.ALWAYS);
-
-        TitledPane advancedPane = new TitledPane("Búsqueda avanzada", advancedGrid);
+        TitledPane advancedPane = new TitledPane("Búsqueda avanzada", advancedScroll);
         advancedPane.setExpanded(false);
 
         header.getChildren().addAll(simpleRow, advancedPane);
@@ -198,16 +368,150 @@ public class AirbnbSearchApp extends Application {
     }
 
     /**
+     * Crea el grupo de campos de texto y categorías para la búsqueda avanzada.
+     */
+    private VBox createTextFieldsGroup() {
+        VBox group = new VBox(FIELD_GROUP_SPACING);
+        
+        // Barrio
+        HBox neighbourhoodRow = new HBox(FIELD_GROUP_SPACING);
+        neighbourhoodRow.setAlignment(Pos.CENTER_LEFT);
+        neighbourhoodField = new TextField();
+        neighbourhoodField.setPromptText("neighbourhood_cleansed (ej: hollywood)");
+        neighbourhoodRow.getChildren().addAll(new Label("Barrio:"), neighbourhoodField);
+        HBox.setHgrow(neighbourhoodField, Priority.ALWAYS);
+        
+        // Amenidad
+        HBox amenityRow = new HBox(FIELD_GROUP_SPACING);
+        amenityRow.setAlignment(Pos.CENTER_LEFT);
+        amenityField = new TextField();
+        amenityField.setPromptText("amenity (ej: pool, wifi, parking)");
+        amenityRow.getChildren().addAll(new Label("Amenidad:"), amenityField);
+        HBox.setHgrow(amenityField, Priority.ALWAYS);
+        
+        // Tipo de propiedad
+        HBox propertyTypeRow = new HBox(FIELD_GROUP_SPACING);
+        propertyTypeRow.setAlignment(Pos.CENTER_LEFT);
+        propertyTypeField = new TextField();
+        propertyTypeField.setPromptText("property_type (ej: entire home, private room)");
+        propertyTypeRow.getChildren().addAll(new Label("Tipo:"), propertyTypeField);
+        HBox.setHgrow(propertyTypeField, Priority.ALWAYS);
+        
+        group.getChildren().addAll(neighbourhoodRow, amenityRow, propertyTypeRow);
+        return group;
+    }
+
+    /**
+     * Crea el grupo de campos numéricos con operadores para la búsqueda avanzada.
+     */
+    private VBox createNumericFieldsGroup() {
+        VBox group = new VBox(FIELD_GROUP_SPACING);
+        
+        // Precio (rango)
+        HBox priceRow = new HBox(FIELD_GROUP_SPACING);
+        priceRow.setAlignment(Pos.CENTER_LEFT);
+        minPriceField = new TextField();
+        minPriceField.setPromptText("Precio mín.");
+        minPriceField.setPrefWidth(FIELD_PRICE_PREF_WIDTH);
+        maxPriceField = new TextField();
+        maxPriceField.setPromptText("Precio máx.");
+        maxPriceField.setPrefWidth(FIELD_PRICE_PREF_WIDTH);
+        Label priceHelp = new Label("(o use operadores: >=100, >100, <200, <=200, =150)");
+        priceHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        priceRow.getChildren().addAll(new Label("Precio:"), minPriceField, new Label("-"), maxPriceField, priceHelp);
+        
+        // Rating con operadores
+        HBox ratingRow = new HBox(FIELD_GROUP_SPACING);
+        ratingRow.setAlignment(Pos.CENTER_LEFT);
+        ratingField = new TextField();
+        ratingField.setPromptText(">=4.7, >4.5, <3.0, =5.0");
+        Label ratingHelp = new Label("(ej: >=4.7 para rating >= 4.7)");
+        ratingHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        ratingRow.getChildren().addAll(new Label("Rating:"), ratingField, ratingHelp);
+        HBox.setHgrow(ratingField, Priority.ALWAYS);
+        
+        // Número de reseñas con operadores
+        HBox reviewsRow = new HBox(FIELD_GROUP_SPACING);
+        reviewsRow.setAlignment(Pos.CENTER_LEFT);
+        reviewsField = new TextField();
+        reviewsField.setPromptText(">=10, >0, <5, =0");
+        Label reviewsHelp = new Label("(ej: >=10 para 10+ reseñas)");
+        reviewsHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        reviewsRow.getChildren().addAll(new Label("Reseñas:"), reviewsField, reviewsHelp);
+        HBox.setHgrow(reviewsField, Priority.ALWAYS);
+        
+        // Habitaciones con operadores
+        HBox bedroomsRow = new HBox(FIELD_GROUP_SPACING);
+        bedroomsRow.setAlignment(Pos.CENTER_LEFT);
+        bedroomsField = new TextField();
+        bedroomsField.setPromptText(">=2, >1, <5, =3");
+        Label bedroomsHelp = new Label("(ej: >=2 para 2+ habitaciones)");
+        bedroomsHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        bedroomsRow.getChildren().addAll(new Label("Habitaciones:"), bedroomsField, bedroomsHelp);
+        HBox.setHgrow(bedroomsField, Priority.ALWAYS);
+        
+        // Baños con operadores
+        HBox bathroomsRow = new HBox(FIELD_GROUP_SPACING);
+        bathroomsRow.setAlignment(Pos.CENTER_LEFT);
+        bathroomsField = new TextField();
+        bathroomsField.setPromptText(">=1, >0, <3, =2");
+        Label bathroomsHelp = new Label("(ej: >=1 para 1+ baños)");
+        bathroomsHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        bathroomsRow.getChildren().addAll(new Label("Baños:"), bathroomsField, bathroomsHelp);
+        HBox.setHgrow(bathroomsField, Priority.ALWAYS);
+        
+        group.getChildren().addAll(priceRow, ratingRow, reviewsRow, bedroomsRow, bathroomsRow);
+        return group;
+    }
+
+    /**
+     * Crea el grupo de campos geográficos para la búsqueda avanzada.
+     */
+    private VBox createGeographicFieldsGroup() {
+        VBox group = new VBox(FIELD_GROUP_SPACING);
+        
+        HBox latRow = new HBox(FIELD_GROUP_SPACING);
+        latRow.setAlignment(Pos.CENTER_LEFT);
+        latField = new TextField();
+        latField.setPromptText("34.0522 (ej: Los Angeles)");
+        Label latHelp = new Label("(rango típico: 33.339 - 34.811)");
+        latHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        latRow.getChildren().addAll(new Label("Latitud:"), latField, latHelp);
+        HBox.setHgrow(latField, Priority.ALWAYS);
+        
+        HBox lonRow = new HBox(FIELD_GROUP_SPACING);
+        lonRow.setAlignment(Pos.CENTER_LEFT);
+        lonField = new TextField();
+        lonField.setPromptText("-118.2437 (ej: Los Angeles)");
+        Label lonHelp = new Label("(rango típico: -118.917 - -117.654)");
+        lonHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        lonRow.getChildren().addAll(new Label("Longitud:"), lonField, lonHelp);
+        HBox.setHgrow(lonField, Priority.ALWAYS);
+        
+        HBox radiusRow = new HBox(FIELD_GROUP_SPACING);
+        radiusRow.setAlignment(Pos.CENTER_LEFT);
+        radiusField = new TextField();
+        radiusField.setPromptText("5000 (metros)");
+        Label radiusHelp = new Label("(ej: 5000 = 5km, 1000 = 1km)");
+        radiusHelp.setStyle("-fx-font-size: " + FONT_SIZE_HELP_TEXT + "px; -fx-text-fill: #666;");
+        radiusRow.getChildren().addAll(new Label("Radio:"), radiusField, radiusHelp);
+        HBox.setHgrow(radiusField, Priority.ALWAYS);
+        
+        group.getChildren().addAll(latRow, lonRow, radiusRow);
+        return group;
+    }
+
+    /**
      * Crea un sidebar para facetas con estructura similar a la de un buscador web:
      * botones de "Aplicar/Quitar filtros" y bloques plegables por categoría.
      */
     private VBox createFacetSidebar() {
-        VBox side = new VBox(8);
-        side.setPadding(new Insets(0, 10, 0, 0));
-        side.setPrefWidth(280);
+        VBox side = new VBox(SIDEBAR_SPACING);
+        side.setPadding(new Insets(0, SIDEBAR_PADDING_RIGHT, 0, 0));
+        side.setPrefWidth(SIDEBAR_PREF_WIDTH);
 
         // Fila de botones estilo "Aplicar filtros" / "Quitar filtros"
-        HBox buttonsRow = new HBox(8);
+        HBox buttonsRow = new HBox(SIDEBAR_SPACING);
         buttonsRow.setAlignment(Pos.CENTER);
         Button applyButton = new Button("Aplicar filtros");
         applyButton.setOnAction(e -> applyFacetSelection());
@@ -218,8 +522,8 @@ public class AirbnbSearchApp extends Application {
         Label title = new Label("Filtros por facetas");
         title.setStyle("-fx-font-weight: bold;");
 
-        facetsContainer = new VBox(6);
-        facetsContainer.setPadding(new Insets(6, 0, 0, 0));
+        facetsContainer = new VBox(FACETS_CONTAINER_SPACING);
+        facetsContainer.setPadding(new Insets(FACETS_CONTAINER_PADDING_TOP, 0, 0, 0));
         facetsContainer.getChildren().add(new Label("Ejecuta una búsqueda para ver facetas disponibles."));
 
         ScrollPane scroll = new ScrollPane(facetsContainer);
@@ -239,27 +543,229 @@ public class AirbnbSearchApp extends Application {
         resultsTable = new TableView<>();
         resultsTable.setItems(resultsData);
 
-        TableColumn<PropertyResult, Integer> idCol = new TableColumn<>("ID");
-        idCol.setCellValueFactory(new PropertyValueFactory<>("id"));
-        idCol.setPrefWidth(70);
-
         TableColumn<PropertyResult, String> nameCol = new TableColumn<>("Nombre");
         nameCol.setCellValueFactory(new PropertyValueFactory<>("name"));
-        nameCol.setPrefWidth(320);
+        nameCol.setPrefWidth(USE_COMPUTED_SIZE);
+        nameCol.setMinWidth(COL_NAME_MIN_WIDTH); // Minimum width for header
+        nameCol.setMaxWidth(COL_NAME_MAX_WIDTH); // Maximum width to prevent excessive expansion
+        nameCol.setResizable(true);
+
+        descriptionCol = new TableColumn<>("Descripción");
+        descriptionCol.setCellValueFactory(new PropertyValueFactory<>("descriptionHighlighted"));
+        descriptionCol.setPrefWidth(USE_COMPUTED_SIZE);
+        descriptionCol.setMinWidth(COL_DESCRIPTION_MIN_WIDTH);
+        descriptionCol.setMaxWidth(COL_DESCRIPTION_MAX_WIDTH);
+        descriptionCol.setResizable(true);
+        descriptionCol.setVisible(true);
+        descriptionCol.setCellFactory(column -> new TableCell<PropertyResult, String>() {
+            @Override
+            protected void updateItem(String highlightedText, boolean empty) {
+                super.updateItem(highlightedText, empty);
+                if (empty || highlightedText == null) {
+                    setGraphic(null);
+                    setPrefHeight(USE_COMPUTED_SIZE);
+                } else {
+                    // Parsear el texto con etiquetas <mark> y crear TextFlow
+                    TextFlow textFlow = parseHighlightedText(highlightedText);
+                    
+                    // Usar ScrollPane para permitir scroll del contenido sin cortar texto
+                    // Esto previene que el TextFlow haga crecer la fila indefinidamente
+                    ScrollPane scrollPane = new ScrollPane(textFlow);
+                    // Bind width to column width for flexibility
+                    scrollPane.prefWidthProperty().bind(column.widthProperty().subtract(COL_DESCRIPTION_SCROLLPANE_BORDER_SUBTRACT));
+                    scrollPane.maxWidthProperty().bind(column.widthProperty().subtract(COL_DESCRIPTION_SCROLLPANE_BORDER_SUBTRACT));
+                    scrollPane.setMaxHeight(COL_DESCRIPTION_HEIGHT); 
+                    scrollPane.setPrefHeight(COL_DESCRIPTION_HEIGHT);
+                    scrollPane.setFitToWidth(true);
+                    scrollPane.setFitToHeight(false);
+                    scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+                    scrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+                    scrollPane.setStyle("-fx-background-color: transparent; -fx-border-color: transparent;");
+                    scrollPane.setPadding(Insets.EMPTY);
+                    
+                    // Bind TextFlow width to ScrollPane width
+                    textFlow.maxWidthProperty().bind(scrollPane.widthProperty().subtract(COL_DESCRIPTION_TEXTFLOW_BORDER_SUBTRACT));
+                    textFlow.prefWidthProperty().bind(scrollPane.widthProperty().subtract(COL_DESCRIPTION_TEXTFLOW_BORDER_SUBTRACT));
+                    
+                    setGraphic(scrollPane);
+                    // Fijar altura de la celda para evitar crecimiento
+                    setPrefHeight(COL_DESCRIPTION_HEIGHT);
+                    setMaxHeight(COL_DESCRIPTION_HEIGHT);
+                }
+            }
+        });
 
         TableColumn<PropertyResult, String> neighCol = new TableColumn<>("Barrio");
         neighCol.setCellValueFactory(new PropertyValueFactory<>("neighbourhood"));
-        neighCol.setPrefWidth(160);
+        neighCol.setPrefWidth(USE_COMPUTED_SIZE);
+        neighCol.setMinWidth(COL_NEIGHBOURHOOD_MIN_WIDTH);
+        neighCol.setMaxWidth(COL_NEIGHBOURHOOD_MAX_WIDTH);
+        neighCol.setResizable(true);
 
         TableColumn<PropertyResult, String> typeCol = new TableColumn<>("Tipo");
         typeCol.setCellValueFactory(new PropertyValueFactory<>("propertyType"));
-        typeCol.setPrefWidth(140);
+        typeCol.setPrefWidth(USE_COMPUTED_SIZE);
+        typeCol.setMinWidth(COL_TYPE_MIN_WIDTH);
+        typeCol.setMaxWidth(COL_TYPE_MAX_WIDTH);
+        typeCol.setResizable(true);
 
         TableColumn<PropertyResult, Double> priceCol = new TableColumn<>("Precio");
         priceCol.setCellValueFactory(new PropertyValueFactory<>("price"));
-        priceCol.setPrefWidth(100);
+        priceCol.setPrefWidth(USE_COMPUTED_SIZE);
+        priceCol.setMinWidth(COL_PRICE_MIN_WIDTH); // Small minimum for numbers
+        priceCol.setMaxWidth(COL_PRICE_MAX_WIDTH);
+        priceCol.setResizable(true);
+        priceCol.setCellFactory(column -> new TableCell<PropertyResult, Double>() {
+            @Override
+            protected void updateItem(Double price, boolean empty) {
+                super.updateItem(price, empty);
+                if (empty || price == null) {
+                    setText(null);
+                } else {
+                    setText(String.format(FORMAT_PRICE, price));
+                }
+            }
+        });
 
-        resultsTable.getColumns().addAll(idCol, nameCol, neighCol, typeCol, priceCol);
+        TableColumn<PropertyResult, Double> ratingCol = new TableColumn<>("Rating");
+        ratingCol.setCellValueFactory(new PropertyValueFactory<>("rating"));
+        ratingCol.setPrefWidth(USE_COMPUTED_SIZE);
+        ratingCol.setMinWidth(COL_RATING_MIN_WIDTH); // Small minimum for numbers
+        ratingCol.setMaxWidth(COL_RATING_MAX_WIDTH);
+        ratingCol.setResizable(true);
+        ratingCol.setCellFactory(column -> new TableCell<PropertyResult, Double>() {
+            @Override
+            protected void updateItem(Double rating, boolean empty) {
+                super.updateItem(rating, empty);
+                if (empty || rating == null || rating == 0.0) {
+                    setText(null);
+                } else {
+                    setText(String.format(FORMAT_RATING, rating));
+                }
+            }
+        });
+
+        TableColumn<PropertyResult, Integer> reviewsCol = new TableColumn<>("Reseñas");
+        reviewsCol.setCellValueFactory(new PropertyValueFactory<>("reviews"));
+        reviewsCol.setPrefWidth(USE_COMPUTED_SIZE);
+        reviewsCol.setMinWidth(COL_REVIEWS_MIN_WIDTH); // Small minimum for numbers
+        reviewsCol.setMaxWidth(COL_REVIEWS_MAX_WIDTH);
+        reviewsCol.setResizable(true);
+        reviewsCol.setCellFactory(column -> new TableCell<PropertyResult, Integer>() {
+            @Override
+            protected void updateItem(Integer reviews, boolean empty) {
+                super.updateItem(reviews, empty);
+                if (empty || reviews == null || reviews == 0) {
+                    setText(null);
+                } else {
+                    setText(String.valueOf(reviews));
+                }
+            }
+        });
+
+        TableColumn<PropertyResult, Integer> bedroomsCol = new TableColumn<>("Habitaciones");
+        bedroomsCol.setCellValueFactory(new PropertyValueFactory<>("bedrooms"));
+        bedroomsCol.setPrefWidth(USE_COMPUTED_SIZE);
+        bedroomsCol.setMinWidth(COL_BEDROOMS_MIN_WIDTH); // Small minimum for numbers
+        bedroomsCol.setMaxWidth(COL_BEDROOMS_MAX_WIDTH);
+        bedroomsCol.setResizable(true);
+        bedroomsCol.setCellFactory(column -> new TableCell<PropertyResult, Integer>() {
+            @Override
+            protected void updateItem(Integer bedrooms, boolean empty) {
+                super.updateItem(bedrooms, empty);
+                if (empty || bedrooms == null || bedrooms == 0) {
+                    setText(null);
+                } else {
+                    setText(String.valueOf(bedrooms));
+                }
+            }
+        });
+
+        TableColumn<PropertyResult, Integer> bathroomsCol = new TableColumn<>("Baños");
+        bathroomsCol.setCellValueFactory(new PropertyValueFactory<>("bathrooms"));
+        bathroomsCol.setPrefWidth(USE_COMPUTED_SIZE);
+        bathroomsCol.setMinWidth(COL_BATHROOMS_MIN_WIDTH); // Very small minimum for single digits
+        bathroomsCol.setMaxWidth(COL_BATHROOMS_MAX_WIDTH);
+        bathroomsCol.setResizable(true);
+        bathroomsCol.setCellFactory(column -> new TableCell<PropertyResult, Integer>() {
+            @Override
+            protected void updateItem(Integer bathrooms, boolean empty) {
+                super.updateItem(bathrooms, empty);
+                if (empty || bathrooms == null || bathrooms == 0) {
+                    setText(null);
+                } else {
+                    setText(String.valueOf(bathrooms));
+                }
+            }
+        });
+
+        TableColumn<PropertyResult, String> urlCol = new TableColumn<>("URL");
+        urlCol.setCellValueFactory(new PropertyValueFactory<>("listingUrl"));
+        urlCol.setPrefWidth(USE_COMPUTED_SIZE);
+        urlCol.setMinWidth(COL_URL_MIN_WIDTH); // Small minimum for "Ver" link
+        urlCol.setMaxWidth(COL_URL_MAX_WIDTH);
+        urlCol.setResizable(true);
+        urlCol.setCellFactory(column -> new TableCell<PropertyResult, String>() {
+            private final Hyperlink hyperlink = new Hyperlink();
+            
+            {
+                hyperlink.setOnAction(e -> {
+                    String url = (String) hyperlink.getUserData();
+                    if (url != null && !url.isEmpty() && hostServices != null) {
+                        hostServices.showDocument(url);
+                    }
+                });
+            }
+            
+            @Override
+            protected void updateItem(String url, boolean empty) {
+                super.updateItem(url, empty);
+                if (empty || url == null || url.isEmpty()) {
+                    setGraphic(null);
+                } else {
+                    hyperlink.setText("Ver");
+                    hyperlink.setUserData(url);
+                    setGraphic(hyperlink);
+                }
+            }
+        });
+
+        TableColumn<PropertyResult, String> amenitiesCol = new TableColumn<>("Amenidades");
+        amenitiesCol.setCellValueFactory(new PropertyValueFactory<>("amenities"));
+        amenitiesCol.setPrefWidth(USE_COMPUTED_SIZE);
+        amenitiesCol.setMinWidth(COL_AMENITIES_MIN_WIDTH);
+        amenitiesCol.setMaxWidth(COL_AMENITIES_MAX_WIDTH);
+        amenitiesCol.setResizable(true);
+        amenitiesCol.setCellFactory(column -> new TableCell<PropertyResult, String>() {
+            @Override
+            protected void updateItem(String amenities, boolean empty) {
+                super.updateItem(amenities, empty);
+                if (empty || amenities == null || amenities.isEmpty()) {
+                    setText(null);
+                } else {
+                    setText(amenities);
+                    setWrapText(true);
+                }
+            }
+        });
+
+        resultsTable.getColumns().addAll(nameCol, descriptionCol, neighCol, typeCol, priceCol, ratingCol, reviewsCol, bedroomsCol, bathroomsCol, urlCol, amenitiesCol);
+
+        // Configurar el TableView para ajustar la altura de las filas al contenido
+        resultsTable.setRowFactory(tv -> {
+            TableRow<PropertyResult> row = new TableRow<PropertyResult>() {
+                @Override
+                protected void updateItem(PropertyResult item, boolean empty) {
+                    super.updateItem(item, empty);
+                    if (empty || item == null) {
+                        setPrefHeight(USE_COMPUTED_SIZE);
+                    } else {
+                        setPrefHeight(USE_COMPUTED_SIZE);
+                    }
+                }
+            };
+            return row;
+        });
 
         return resultsTable;
     }
@@ -268,13 +774,13 @@ public class AirbnbSearchApp extends Application {
      * Barra de estado inferior.
      */
     private HBox createStatusBar() {
-        HBox bar = new HBox(10);
+        HBox bar = new HBox(STATUS_BAR_SPACING);
         bar.setAlignment(Pos.CENTER_LEFT);
-        bar.setPadding(new Insets(8, 0, 0, 0));
+        bar.setPadding(new Insets(STATUS_BAR_PADDING_TOP, 0, 0, 0));
 
         statusLabel = new Label("Listo.");
         Label queryLabel = new Label();
-        queryLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: #666;");
+        queryLabel.setStyle("-fx-font-size: " + FONT_SIZE_QUERY_LABEL + "px; -fx-text-fill: #666;");
 
         // Guardamos la referencia en la propia etiqueta de estado mediante userData para no
         // añadir más campos a la clase.
@@ -287,34 +793,76 @@ public class AirbnbSearchApp extends Application {
 
     /**
      * Ejecuta la búsqueda en un hilo de fondo sencillo y actualiza la UI al terminar.
-     * Para mantenerlo KISS, se usan clases básicas de Lucene en lugar de reutilizar
-     * el menú interactivo de BusquedasLucene.
+     * Inspirado en BusquedasLucene, ahora soporta múltiples campos y operadores.
      */
     private void executeSearch() {
         final String queryText = simpleQueryField.getText() != null
                 ? simpleQueryField.getText().trim()
                 : "";
-        final String neighbourhood = neighbourhoodField.getText() != null
+        final String neighbourhood = neighbourhoodField != null && neighbourhoodField.getText() != null
                 ? neighbourhoodField.getText().trim().toLowerCase()
                 : "";
-        final String minPriceText = minPriceField.getText() != null ? minPriceField.getText().trim() : "";
-        final String maxPriceText = maxPriceField.getText() != null ? maxPriceField.getText().trim() : "";
+        final String minPriceText = minPriceField != null && minPriceField.getText() != null 
+                ? minPriceField.getText().trim() 
+                : "";
+        final String maxPriceText = maxPriceField != null && maxPriceField.getText() != null 
+                ? maxPriceField.getText().trim() 
+                : "";
+        final String ratingText = ratingField != null && ratingField.getText() != null
+                ? ratingField.getText().trim()
+                : "";
+        final String reviewsText = reviewsField != null && reviewsField.getText() != null
+                ? reviewsField.getText().trim()
+                : "";
+        final String bedroomsText = bedroomsField != null && bedroomsField.getText() != null
+                ? bedroomsField.getText().trim()
+                : "";
+        final String bathroomsText = bathroomsField != null && bathroomsField.getText() != null
+                ? bathroomsField.getText().trim()
+                : "";
+        final String amenityText = amenityField != null && amenityField.getText() != null
+                ? amenityField.getText().trim()
+                : "";
+        final String propertyTypeText = propertyTypeField != null && propertyTypeField.getText() != null
+                ? propertyTypeField.getText().trim()
+                : "";
+        final String latText = latField != null && latField.getText() != null
+                ? latField.getText().trim()
+                : "";
+        final String lonText = lonField != null && lonField.getText() != null
+                ? lonField.getText().trim()
+                : "";
+        final String radiusText = radiusField != null && radiusField.getText() != null
+                ? radiusField.getText().trim()
+                : "";
 
         statusLabel.setText("Buscando...");
 
         // Sin facetas activas al pulsar "Buscar"
-        runSearchInBackground(queryText, neighbourhood, minPriceText, maxPriceText, null);
+        runSearchInBackground(queryText, neighbourhood, minPriceText, maxPriceText, 
+                ratingText, reviewsText, bedroomsText, bathroomsText,
+                amenityText, propertyTypeText, latText, lonText, radiusText, null);
     }
 
     /**
      * Ejecuta la búsqueda (con o sin faceta) en un hilo de fondo.
-     * Si facetDim/facetLabel son no nulos, se aplica DrillDownQuery como en
+     * Inspirado en BusquedasLucene, ahora soporta múltiples campos y operadores.
+     * Si activeFacets no es nulo, se aplica DrillDownQuery como en
      * BusquedasLucene.ejecutarQueryMegaCampoConFacetas (7.2).
      */
     private void runSearchInBackground(String queryText,
                                        String neighbourhood,
                                        String minPriceText,
                                        String maxPriceText,
+                                       String ratingText,
+                                       String reviewsText,
+                                       String bedroomsText,
+                                       String bathroomsText,
+                                       String amenityText,
+                                       String propertyTypeText,
+                                       String latText,
+                                       String lonText,
+                                       String radiusText,
                                        Map<String, List<String>> activeFacets) {
         new Thread(() -> {
             long start = System.currentTimeMillis();
@@ -322,6 +870,7 @@ public class AirbnbSearchApp extends Application {
             Map<String, List<LabelAndValue>> facetsData = new LinkedHashMap<>();
             String luceneQueryText = "";
             String errorMessage = null;
+            long totalHits = 0;
 
             try {
                 Analyzer analyzer = AirbnbIndexador.crearAnalizador();
@@ -350,14 +899,92 @@ public class AirbnbSearchApp extends Application {
                     queryBuilder.add(neighQuery, BooleanClause.Occur.FILTER);
                 }
 
-                // 3) Filtros por precio (DoublePoint)
-                Double minPrice = parseDoubleOrNull(minPriceText);
-                Double maxPrice = parseDoubleOrNull(maxPriceText);
-                if (minPrice != null || maxPrice != null) {
-                    double min = minPrice != null ? minPrice : 0.0;
-                    double max = maxPrice != null ? maxPrice : Double.MAX_VALUE;
-                    Query priceQuery = DoublePoint.newRangeQuery("price", min, max);
-                    queryBuilder.add(priceQuery, BooleanClause.Occur.FILTER);
+                // 3) Filtros por precio (DoublePoint) - soporta rango o operadores
+                if (minPriceText != null && !minPriceText.isEmpty() && maxPriceText != null && !maxPriceText.isEmpty()) {
+                    // Rango de precio (formato MIN-MAX)
+                    Double minPrice = parseDoubleOrNull(minPriceText);
+                    Double maxPrice = parseDoubleOrNull(maxPriceText);
+                    if (minPrice != null || maxPrice != null) {
+                        double min = minPrice != null ? minPrice : 0.0;
+                        double max = maxPrice != null ? maxPrice : Double.MAX_VALUE;
+                        Query priceQuery = DoublePoint.newRangeQuery("price", min, max);
+                        queryBuilder.add(priceQuery, BooleanClause.Occur.FILTER);
+                    }
+                } else if (minPriceText != null && !minPriceText.isEmpty()) {
+                    // Operador en minPriceText (ej: >=100, >100, <200, <=200, =150)
+                    Query priceQuery = buildNumericQueryWithOperator("price", minPriceText, true);
+                    if (priceQuery != null) {
+                        queryBuilder.add(priceQuery, BooleanClause.Occur.FILTER);
+                    }
+                } else if (maxPriceText != null && !maxPriceText.isEmpty()) {
+                    // Operador en maxPriceText
+                    Query priceQuery = buildNumericQueryWithOperator("price", maxPriceText, true);
+                    if (priceQuery != null) {
+                        queryBuilder.add(priceQuery, BooleanClause.Occur.FILTER);
+                    }
+                }
+
+                // 4) Filtro por rating (review_scores_rating) con operadores
+                if (ratingText != null && !ratingText.isEmpty()) {
+                    Query ratingQuery = buildNumericQueryWithOperator("review_scores_rating", ratingText, true);
+                    if (ratingQuery != null) {
+                        queryBuilder.add(ratingQuery, BooleanClause.Occur.FILTER);
+                    }
+                }
+
+                // 5) Filtro por número de reseñas (number_of_reviews) con operadores
+                if (reviewsText != null && !reviewsText.isEmpty()) {
+                    Query reviewsQuery = buildNumericQueryWithOperator("number_of_reviews", reviewsText, false);
+                    if (reviewsQuery != null) {
+                        queryBuilder.add(reviewsQuery, BooleanClause.Occur.FILTER);
+                    }
+                }
+
+                // 6) Filtro por habitaciones (bedrooms) con operadores
+                if (bedroomsText != null && !bedroomsText.isEmpty()) {
+                    Query bedroomsQuery = buildNumericQueryWithOperator("bedrooms", bedroomsText, false);
+                    if (bedroomsQuery != null) {
+                        queryBuilder.add(bedroomsQuery, BooleanClause.Occur.FILTER);
+                    }
+                }
+
+                // 7) Filtro por baños (bathrooms) con operadores
+                if (bathroomsText != null && !bathroomsText.isEmpty()) {
+                    Query bathroomsQuery = buildNumericQueryWithOperator("bathrooms", bathroomsText, false);
+                    if (bathroomsQuery != null) {
+                        queryBuilder.add(bathroomsQuery, BooleanClause.Occur.FILTER);
+                    }
+                }
+
+                // 8) Filtro por amenidad (amenity) - búsqueda textual
+                if (amenityText != null && !amenityText.isEmpty()) {
+                    QueryParser amenityParser = new QueryParser("amenity", analyzer);
+                    Query amenityQuery = amenityParser.parse(amenityText);
+                    queryBuilder.add(amenityQuery, BooleanClause.Occur.MUST);
+                }
+
+                // 9) Filtro por tipo de propiedad (property_type) - búsqueda textual
+                if (propertyTypeText != null && !propertyTypeText.isEmpty()) {
+                    QueryParser propertyTypeParser = new QueryParser("property_type", analyzer);
+                    Query propertyTypeQuery = propertyTypeParser.parse(propertyTypeText.toLowerCase());
+                    queryBuilder.add(propertyTypeQuery, BooleanClause.Occur.FILTER);
+                }
+
+                // 10) Búsqueda geográfica (lat, lon, radio)
+                if (latText != null && !latText.isEmpty() && lonText != null && !lonText.isEmpty() 
+                        && radiusText != null && !radiusText.isEmpty()) {
+                    try {
+                        double lat = Double.parseDouble(latText);
+                        double lon = Double.parseDouble(lonText);
+                        double radiusMeters = Double.parseDouble(radiusText);
+                        if (radiusMeters > 0) {
+                            Query geoQuery = LatLonPoint.newDistanceQuery(
+                                    "location", lat, lon, radiusMeters);
+                            queryBuilder.add(geoQuery, BooleanClause.Occur.FILTER);
+                        }
+                    } catch (NumberFormatException e) {
+                        // Ignorar si los valores no son válidos
+                    }
                 }
 
                 Query baseQuery = queryBuilder.build();
@@ -372,7 +999,7 @@ public class AirbnbSearchApp extends Application {
                     FacetsCollector fcInitial = new FacetsCollector();
                     searcher.search(baseQuery, fcInitial);
                     Facets facetsInitial = new FastTaxonomyFacetCounts(taxoReader, fconfig, fcInitial);
-                    List<FacetResult> allDimsInitial = facetsInitial.getAllDims(20);
+                    List<FacetResult> allDimsInitial = facetsInitial.getAllDims(FACET_DIMS_INITIAL_LIMIT);
                     Map<String, List<LabelAndValue>> availableFacets = new LinkedHashMap<>();
                     if (allDimsInitial != null) {
                         for (FacetResult fr : allDimsInitial) {
@@ -401,7 +1028,7 @@ public class AirbnbSearchApp extends Application {
                             FacetsCollector fcAll = new FacetsCollector();
                             searcher.search(new MatchAllDocsQuery(), fcAll);
                             Facets facetsAll = new FastTaxonomyFacetCounts(taxoReader, fconfig, fcAll);
-                            List<FacetResult> allDimsAll = facetsAll.getAllDims(1000); // Obtener muchas para asegurar que tenemos todas
+                            List<FacetResult> allDimsAll = facetsAll.getAllDims(FACET_DIMS_ALL_LIMIT); // Obtener muchas para asegurar que tenemos todas
                             allFacetsFromIndex = new LinkedHashMap<>();
                             if (allDimsAll != null) {
                                 for (FacetResult fr : allDimsAll) {
@@ -498,13 +1125,22 @@ public class AirbnbSearchApp extends Application {
                         
                         // Usar DrillSideways para mantener conteos de facetas relacionadas
                         DrillSideways drillSideways = new DrillSideways(searcher, fconfig, taxoReader);
-                        DrillSideways.DrillSidewaysResult dsResult = drillSideways.search(ddq, 50);
+                        DrillSideways.DrillSidewaysResult dsResult = drillSideways.search(ddq, MAX_RESULTS);
                         
                         topDocs = dsResult.hits;
+                        // Obtener el total de resultados usando reflexión para acceder al campo value
+                        try {
+                            java.lang.reflect.Field valueField = topDocs.totalHits.getClass().getDeclaredField("value");
+                            valueField.setAccessible(true);
+                            totalHits = valueField.getLong(topDocs.totalHits);
+                        } catch (Exception e) {
+                            // Fallback: usar el número de resultados mostrados
+                            totalHits = topDocs.scoreDocs.length;
+                        }
                         
                         // Obtener facetas del resultado de DrillSideways (mantiene conteos de todas las facetas)
                         Facets facets = dsResult.facets;
-                        List<FacetResult> allDims = facets.getAllDims(20);
+                        List<FacetResult> allDims = facets.getAllDims(FACET_DIMS_INITIAL_LIMIT);
                         if (allDims != null) {
                             for (FacetResult fr : allDims) {
                                 if (fr != null && fr.dim != null) {
@@ -514,27 +1150,45 @@ public class AirbnbSearchApp extends Application {
                         }
                     } else {
                         // Sin facetas activas: búsqueda normal y recolección de facetas estándar
-                        topDocs = searcher.search(baseQuery, 50);
+                        topDocs = searcher.search(baseQuery, MAX_RESULTS);
+                        // Obtener el total de resultados usando reflexión para acceder al campo value
+                        try {
+                            java.lang.reflect.Field valueField = topDocs.totalHits.getClass().getDeclaredField("value");
+                            valueField.setAccessible(true);
+                            totalHits = valueField.getLong(topDocs.totalHits);
+                        } catch (Exception e) {
+                            // Fallback: usar el número de resultados mostrados
+                            totalHits = topDocs.scoreDocs.length;
+                        }
                         facetsData = availableFacets;
+                    }
+
+                    // Crear query para highlighting (solo si hay texto de búsqueda)
+                    Query highlightQuery = null;
+                    if (queryText != null && !queryText.isEmpty()) {
+                        try {
+                            QueryParser descriptionParser = new QueryParser("description", analyzer);
+                            highlightQuery = descriptionParser.parse(queryText);
+                        } catch (Exception e) {
+                            // Si falla el parseo, no aplicar highlighting
+                            highlightQuery = null;
+                        }
                     }
 
                     // Procesar resultados de documentos
                     for (ScoreDoc sd : topDocs.scoreDocs) {
                         Document doc = searcher.storedFields().document(sd.doc);
 
-                        int id = 0;
-                        // El ID se almacena como IntPoint + StoredField. Recuperamos el StoredField.
-                        String idStr = doc.get("id");
-                        if (idStr != null) {
-                            try {
-                                id = (int) Double.parseDouble(idStr);
-                            } catch (NumberFormatException ignored) {
-                            }
-                        }
-
                         String name = doc.get("name");
                         String neigh = doc.get("neighbourhood_cleansed_original");
                         String type = doc.get("property_type_original");
+                        String description = doc.get("description");
+
+                        // Aplicar highlighting a la descripción si hay query de texto
+                        String descriptionHighlighted = description;
+                        if (highlightQuery != null && description != null && !description.isEmpty()) {
+                            descriptionHighlighted = applyHighlighting(description, highlightQuery, analyzer, "description");
+                        }
 
                         Double price = null;
                         String priceStr = doc.get("price");
@@ -545,7 +1199,54 @@ public class AirbnbSearchApp extends Application {
                             }
                         }
 
-                        results.add(new PropertyResult(id, name, neigh, type, price));
+                        Double rating = null;
+                        String ratingStr = doc.get("review_scores_rating");
+                        if (ratingStr != null) {
+                            try {
+                                rating = Double.parseDouble(ratingStr);
+                            } catch (NumberFormatException ignored) {
+                            }
+                        }
+
+                        Integer reviews = null;
+                        String reviewsStr = doc.get("number_of_reviews");
+                        if (reviewsStr != null) {
+                            try {
+                                reviews = Integer.parseInt(reviewsStr);
+                            } catch (NumberFormatException ignored) {
+                            }
+                        }
+
+                        Integer bedrooms = null;
+                        String bedroomsStr = doc.get("bedrooms");
+                        if (bedroomsStr != null) {
+                            try {
+                                bedrooms = Integer.parseInt(bedroomsStr);
+                            } catch (NumberFormatException ignored) {
+                            }
+                        }
+
+                        Integer bathrooms = null;
+                        String bathroomsStr = doc.get("bathrooms");
+                        if (bathroomsStr != null) {
+                            try {
+                                // bathrooms puede ser decimal, pero lo tratamos como entero para la tabla
+                                double bathroomsDouble = Double.parseDouble(bathroomsStr);
+                                bathrooms = (int) Math.round(bathroomsDouble);
+                            } catch (NumberFormatException ignored) {
+                            }
+                        }
+
+                        String listingUrl = doc.get("listing_url");
+
+                        // Extraer todas las amenidades (campo multivaluado)
+                        String[] amenityValues = doc.getValues("amenity");
+                        String amenitiesStr = "";
+                        if (amenityValues != null && amenityValues.length > 0) {
+                            amenitiesStr = String.join(", ", amenityValues);
+                        }
+
+                        results.add(new PropertyResult(0, name, neigh, type, price, rating, reviews, bedrooms, bathrooms, listingUrl, amenitiesStr, description, descriptionHighlighted));
                     }
                 }
 
@@ -573,6 +1274,7 @@ public class AirbnbSearchApp extends Application {
             final String luceneQueryFinal = luceneQueryText;
             final List<PropertyResult> resultsFinal = results;
             final Map<String, List<LabelAndValue>> facetsFinal = facetsData;
+            final long totalHitsFinal = totalHits;
 
             Platform.runLater(() -> {
                 resultsData.setAll(resultsFinal);
@@ -591,7 +1293,10 @@ public class AirbnbSearchApp extends Application {
                         queryLabel.setText("");
                     }
                 } else {
-                    statusLabel.setText("Encontrados " + resultsFinal.size() + " resultados en " + elapsed + " ms.");
+                    String resultsText = totalHitsFinal > resultsFinal.size() 
+                        ? "Encontrados " + totalHitsFinal + " resultados (mostrando " + resultsFinal.size() + ") en " + elapsed + " ms."
+                        : "Encontrados " + resultsFinal.size() + " resultados en " + elapsed + " ms.";
+                    statusLabel.setText(resultsText);
                     if (queryLabel != null) {
                         queryLabel.setText("Query Lucene: " + luceneQueryFinal);
                     }
@@ -611,6 +1316,209 @@ public class AirbnbSearchApp extends Application {
         }
     }
 
+    /**
+     * Helper: Parsea un string numérico con operador y devuelve el valor double.
+     * Inspirado en BusquedasLucene.parseDoubleValue.
+     * Soporta formatos: ">30.3", "<10", "10", "=100", ">=50.5", "<=20"
+     * 
+     * @param valorStr String con formato de operador y valor
+     * @return El valor numérico extraído como double
+     * @throws NumberFormatException Si el formato es inválido
+     */
+    private static double parseDoubleValue(String valorStr) throws NumberFormatException {
+        String input = valorStr.trim();
+
+        if (input.startsWith(">=")) {
+            return Double.parseDouble(input.substring(2).trim());
+        } else if (input.startsWith("<=")) {
+            return Double.parseDouble(input.substring(2).trim());
+        } else if (input.startsWith(">")) {
+            return Double.parseDouble(input.substring(1).trim());
+        } else if (input.startsWith("<")) {
+            return Double.parseDouble(input.substring(1).trim());
+        } else if (input.startsWith("=")) {
+            return Double.parseDouble(input.substring(1).trim());
+        } else {
+            // Sin operador explícito, asumir que es solo el número
+            return Double.parseDouble(input);
+        }
+    }
+
+    /**
+     * Construye una query numérica con operador (similar a BusquedasLucene.ejecutarQueryPrecioExacto).
+     * Soporta operadores: >=, >, <, <=, =, o sin operador (igualdad).
+     * 
+     * @param fieldName Nombre del campo (ej: "price", "review_scores_rating", "bedrooms")
+     * @param valorStr String con operador y valor (ej: ">=4.7", ">10", "=3")
+     * @param isDouble true si es DoublePoint, false si es IntPoint
+     * @return Query construida o null si el formato es inválido
+     */
+    private Query buildNumericQueryWithOperator(String fieldName, String valorStr, boolean isDouble) {
+        if (valorStr == null || valorStr.trim().isEmpty()) {
+            return null;
+        }
+
+        try {
+            String input = valorStr.trim();
+            Query query;
+
+            if (isDouble) {
+                double valor = parseDoubleValue(input);
+                if (input.startsWith(">=")) {
+                    query = DoublePoint.newRangeQuery(fieldName, valor, Double.MAX_VALUE);
+                } else if (input.startsWith("<=")) {
+                    query = DoublePoint.newRangeQuery(fieldName, DOUBLE_DEFAULT_MIN, valor);
+                } else if (input.startsWith(">")) {
+                    // Precio mayor: desde valor+epsilon hasta Double.MAX_VALUE
+                    double min = valor + DOUBLE_EPSILON;
+                    query = DoublePoint.newRangeQuery(fieldName, min, Double.MAX_VALUE);
+                } else if (input.startsWith("<")) {
+                    // Precio menor: desde 0 hasta valor-epsilon
+                    double max = valor - DOUBLE_EPSILON;
+                    query = DoublePoint.newRangeQuery(fieldName, DOUBLE_DEFAULT_MIN, max);
+                } else if (input.startsWith("=")) {
+                    query = DoublePoint.newRangeQuery(fieldName, valor, valor);
+                } else {
+                    // Sin operador explícito, asumir igualdad
+                    query = DoublePoint.newRangeQuery(fieldName, valor, valor);
+                }
+            } else {
+                // IntPoint
+                double valorDouble = parseDoubleValue(input);
+                int valor = (int) valorDouble;
+                if (input.startsWith(">=")) {
+                    query = IntPoint.newRangeQuery(fieldName, valor, Integer.MAX_VALUE);
+                } else if (input.startsWith("<=")) {
+                    query = IntPoint.newRangeQuery(fieldName, Integer.MIN_VALUE, valor);
+                } else if (input.startsWith(">")) {
+                    // Excluir el valor exacto
+                    int min = valor + INT_EPSILON;
+                    query = IntPoint.newRangeQuery(fieldName, min, Integer.MAX_VALUE);
+                } else if (input.startsWith("<")) {
+                    // Excluir el valor exacto
+                    int max = valor - INT_EPSILON;
+                    query = IntPoint.newRangeQuery(fieldName, Integer.MIN_VALUE, max);
+                } else if (input.startsWith("=")) {
+                    query = IntPoint.newRangeQuery(fieldName, valor, valor);
+                } else {
+                    // Sin operador explícito, asumir igualdad
+                    query = IntPoint.newRangeQuery(fieldName, valor, valor);
+                }
+            }
+            return query;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Parsea texto con etiquetas <mark> y crea un TextFlow para mostrar en JavaFX.
+     * 
+     * @param highlightedText Texto con etiquetas <mark> para resaltar
+     * @return TextFlow con texto normal y texto resaltado
+     */
+    private TextFlow parseHighlightedText(String highlightedText) {
+        TextFlow textFlow = new TextFlow();
+        
+        if (highlightedText == null || highlightedText.isEmpty()) {
+            return textFlow;
+        }
+        
+        // Parsear manualmente las etiquetas <mark> y </mark>
+        int pos = 0;
+        boolean inHighlight = false;
+        
+        while (pos < highlightedText.length()) {
+            if (highlightedText.startsWith(HTML_TAG_MARK_OPEN, pos)) {
+                pos += HTML_TAG_MARK_OPEN_LENGTH; // Longitud de "<mark>"
+                inHighlight = true;
+            } else if (highlightedText.startsWith(HTML_TAG_MARK_CLOSE, pos)) {
+                pos += HTML_TAG_MARK_CLOSE_LENGTH; // Longitud de "</mark>"
+                inHighlight = false;
+            } else {
+                // Encontrar el siguiente tag o el final del texto
+                int nextTag = highlightedText.length();
+                int nextOpen = highlightedText.indexOf(HTML_TAG_MARK_OPEN, pos);
+                int nextClose = highlightedText.indexOf(HTML_TAG_MARK_CLOSE, pos);
+                
+                if (nextOpen != -1 && nextOpen < nextTag) {
+                    nextTag = nextOpen;
+                }
+                if (nextClose != -1 && nextClose < nextTag) {
+                    nextTag = nextClose;
+                }
+                
+                String textPart = highlightedText.substring(pos, nextTag);
+                if (!textPart.isEmpty()) {
+                    // Normalizar espacios y eliminar newlines que puedan causar altura extra
+                    textPart = textPart.replaceAll("\\s+", " ").replaceAll("\\n+", " ").trim();
+                    if (!textPart.isEmpty()) {
+                        Text textNode = new Text(textPart);
+                        if (inHighlight) {
+                            // Texto resaltado: usar negrita y color oscuro para destacar
+                            // Evitar StackPane/Region que causan problemas de wrapping en TextFlow
+                            textNode.setStyle("-fx-font-weight: bold; -fx-fill: #B8860B;");
+                        }
+                        textFlow.getChildren().add(textNode);
+                    }
+                }
+                pos = nextTag;
+            }
+        }
+        
+        return textFlow;
+    }
+
+    /**
+     * Aplica highlighting a un texto usando la query de Lucene.
+     * Retorna el texto con términos resaltados usando etiquetas HTML <mark>.
+     * 
+     * @param text Texto a resaltar
+     * @param query Query de Lucene con los términos a resaltar
+     * @param analyzer Analizador para tokenizar el texto
+     * @param fieldName Nombre del campo (para el QueryScorer)
+     * @return Texto resaltado con etiquetas <mark>, o el texto original si hay error
+     */
+    private String applyHighlighting(String text, Query query, Analyzer analyzer, String fieldName) {
+        if (text == null || text.isEmpty() || query == null) {
+            return text;
+        }
+
+        try {
+            // Crear formatter HTML para resaltar con <mark>
+            SimpleHTMLFormatter formatter = new SimpleHTMLFormatter("<mark>", "</mark>");
+            
+            // Crear scorer basado en la query
+            QueryScorer scorer = new QueryScorer(query, fieldName);
+            
+            // Crear highlighter
+            Highlighter highlighter = new Highlighter(formatter, scorer);
+            highlighter.setTextFragmenter(new SimpleSpanFragmenter(scorer, Integer.MAX_VALUE));
+            
+            // Aplicar highlighting
+            TokenStream tokenStream = analyzer.tokenStream(fieldName, new StringReader(text));
+            String highlighted = highlighter.getBestFragment(tokenStream, text);
+            
+            // Si no hay fragmentos resaltados, retornar el texto original
+            if (highlighted == null) {
+                return text;
+            }
+            
+            // Limpiar el texto resaltado: eliminar <br> tags y normalizar espacios
+            // Esto previene que las filas se hagan excesivamente altas
+            highlighted = highlighted
+                .replaceAll("(?i)<br\\s*/?>", " ")  // Eliminar <br>, <br/>, <br />
+                .replaceAll("\\s+", " ")             // Normalizar múltiples espacios a uno solo
+                .replaceAll("\\n+", " ")             // Reemplazar newlines con espacios
+                .trim();                             // Eliminar espacios al inicio/final
+            
+            return highlighted;
+        } catch (Exception e) {
+            // En caso de error, retornar el texto original
+            return text;
+        }
+    }
+
     public static void main(String[] args) {
         // Pasamos args directamente a JavaFX; esto permite usar --index-root también aquí.
         launch(args);
@@ -621,9 +1529,18 @@ public class AirbnbSearchApp extends Application {
      */
     private void clearFiltersAndResults() {
         simpleQueryField.clear();
-        neighbourhoodField.clear();
-        minPriceField.clear();
-        maxPriceField.clear();
+        if (neighbourhoodField != null) neighbourhoodField.clear();
+        if (minPriceField != null) minPriceField.clear();
+        if (maxPriceField != null) maxPriceField.clear();
+        if (ratingField != null) ratingField.clear();
+        if (reviewsField != null) reviewsField.clear();
+        if (bedroomsField != null) bedroomsField.clear();
+        if (bathroomsField != null) bathroomsField.clear();
+        if (amenityField != null) amenityField.clear();
+        if (propertyTypeField != null) propertyTypeField.clear();
+        if (latField != null) latField.clear();
+        if (lonField != null) lonField.clear();
+        if (radiusField != null) radiusField.clear();
         resultsData.clear();
         if (facetsContainer != null) {
             facetsContainer.getChildren().clear();
@@ -734,7 +1651,7 @@ public class AirbnbSearchApp extends Application {
             }
             
             // Crear un TitledPane principal para "Tipo de Propiedad"
-            VBox mainPropertyTypeBox = new VBox(6);
+            VBox mainPropertyTypeBox = new VBox(PROPERTY_TYPE_BOX_SPACING);
             
             // Determinar qué categorías tienen facetas activas para expandirlas
             // Incluye tanto categorías seleccionadas directamente como aquellas con subfacetas activas
@@ -780,19 +1697,43 @@ public class AirbnbSearchApp extends Application {
                 categoryCheckBox.setUserData(new FacetSelection("property_type", category));
                 
                 // Contenedor para las subfacetas de esta categoría
-                VBox subFacetsBox = new VBox(4);
-                subFacetsBox.setPadding(new Insets(5, 0, 0, 20)); // Indentación para subfacetas
+                VBox subFacetsBox = new VBox(SUBFACETS_BOX_SPACING);
+                subFacetsBox.setPadding(new Insets(SUBFACETS_BOX_PADDING_TOP, 0, 0, SUBFACETS_BOX_PADDING_LEFT)); // Indentación para subfacetas
                 
                 // Extraer subfacetas activas para esta categoría
                 List<String> activeForCategory = activeFacets != null ? 
                     extractActiveForCategory(activeFacets.get("property_type"), category) : null;
                 
+                // Crear lista de subfacetas que incluye las del resultado y las activas que no aparecen
+                List<LabelAndValue> allSubTypes = new ArrayList<>(subTypes);
+                Set<String> existingSubPaths = new HashSet<>();
                 for (LabelAndValue lv : subTypes) {
+                    existingSubPaths.add(category + "/" + lv.label);
+                }
+                
+                // Agregar subfacetas activas que no están en los resultados
+                if (activeForCategory != null) {
+                    for (String activePath : activeForCategory) {
+                        if (!existingSubPaths.contains(activePath)) {
+                            // Extraer el label de la subfaceta del path completo
+                            String[] parts = activePath.split("/", 2);
+                            if (parts.length == 2 && parts[0].equals(category)) {
+                                allSubTypes.add(new LabelAndValue(parts[1], 0L));
+                            }
+                        }
+                    }
+                }
+                
+                for (LabelAndValue lv : allSubTypes) {
                     String label = lv.label;
                     long count = lv.value.longValue();
                     String fullPath = category + "/" + label;
                     
-                    CheckBox cb = new CheckBox(label + " (" + count + ")");
+                    // Mostrar count solo si es > 0, o mostrar "(aplicado)" si está activo pero tiene count 0
+                    String countText = count > 0 ? " (" + count + ")" : 
+                        (activeForCategory != null && activeForCategory.contains(fullPath) ? " (aplicado)" : " (0)");
+                    
+                    CheckBox cb = new CheckBox(label + countText);
                     cb.setUserData(new FacetSelection("property_type", fullPath));
                     // Marcar como seleccionado si está en las facetas activas
                     // Esto incluye tanto cuando se selecciona directamente como cuando viene de la búsqueda
@@ -825,7 +1766,7 @@ public class AirbnbSearchApp extends Application {
                 });
                 
                 // Contenedor para la categoría y sus subfacetas
-                VBox categoryContainer = new VBox(4);
+                VBox categoryContainer = new VBox(CATEGORY_CONTAINER_SPACING);
                 categoryContainer.getChildren().addAll(categoryCheckBox, subFacetsBox);
                 
                 mainPropertyTypeBox.getChildren().add(categoryContainer);
@@ -848,10 +1789,25 @@ public class AirbnbSearchApp extends Application {
             if ("property_type_simple".equals(dim)) {
                 continue;
             }
-            List<LabelAndValue> values = entry.getValue();
-            VBox box = new VBox(4);
+            List<LabelAndValue> values = new ArrayList<>(entry.getValue());
+            VBox box = new VBox(FACET_BOX_SPACING);
 
             List<String> activeForDim = activeFacets != null ? activeFacets.get(dim) : null;
+            
+            // Asegurar que las facetas activas siempre aparezcan en la lista, incluso si no están en los resultados
+            // Esto previene que los filtros seleccionados desaparezcan de la interfaz
+            if (activeForDim != null) {
+                Set<String> existingLabels = new HashSet<>();
+                for (LabelAndValue lv : values) {
+                    existingLabels.add(lv.label);
+                }
+                // Agregar facetas activas que no están en los resultados con count 0
+                for (String activeLabel : activeForDim) {
+                    if (!existingLabels.contains(activeLabel)) {
+                        values.add(new LabelAndValue(activeLabel, 0L));
+                    }
+                }
+            }
 
             for (LabelAndValue lv : values) {
                 String label = lv.label;
@@ -863,7 +1819,11 @@ public class AirbnbSearchApp extends Application {
                     ? translations.get(label) 
                     : label;
                 
-                CheckBox cb = new CheckBox(displayLabel + " (" + count + ")");
+                // Mostrar count solo si es > 0, o mostrar "(aplicado)" si está activo pero tiene count 0
+                String countText = count > 0 ? " (" + count + ")" : 
+                    (activeForDim != null && activeForDim.contains(label) ? " (aplicado)" : " (0)");
+                
+                CheckBox cb = new CheckBox(displayLabel + countText);
                 cb.setUserData(new FacetSelection(dim, label));
                 if (activeForDim != null && activeForDim.contains(label)) {
                     cb.setSelected(true);
@@ -902,14 +1862,47 @@ public class AirbnbSearchApp extends Application {
         final String queryText = simpleQueryField.getText() != null
                 ? simpleQueryField.getText().trim()
                 : "";
-        final String neighbourhood = neighbourhoodField.getText() != null
+        final String neighbourhood = neighbourhoodField != null && neighbourhoodField.getText() != null
                 ? neighbourhoodField.getText().trim().toLowerCase()
                 : "";
-        final String minPriceText = minPriceField.getText() != null ? minPriceField.getText().trim() : "";
-        final String maxPriceText = maxPriceField.getText() != null ? maxPriceField.getText().trim() : "";
+        final String minPriceText = minPriceField != null && minPriceField.getText() != null 
+                ? minPriceField.getText().trim() 
+                : "";
+        final String maxPriceText = maxPriceField != null && maxPriceField.getText() != null 
+                ? maxPriceField.getText().trim() 
+                : "";
+        final String ratingText = ratingField != null && ratingField.getText() != null
+                ? ratingField.getText().trim()
+                : "";
+        final String reviewsText = reviewsField != null && reviewsField.getText() != null
+                ? reviewsField.getText().trim()
+                : "";
+        final String bedroomsText = bedroomsField != null && bedroomsField.getText() != null
+                ? bedroomsField.getText().trim()
+                : "";
+        final String bathroomsText = bathroomsField != null && bathroomsField.getText() != null
+                ? bathroomsField.getText().trim()
+                : "";
+        final String amenityText = amenityField != null && amenityField.getText() != null
+                ? amenityField.getText().trim()
+                : "";
+        final String propertyTypeText = propertyTypeField != null && propertyTypeField.getText() != null
+                ? propertyTypeField.getText().trim()
+                : "";
+        final String latText = latField != null && latField.getText() != null
+                ? latField.getText().trim()
+                : "";
+        final String lonText = lonField != null && lonField.getText() != null
+                ? lonField.getText().trim()
+                : "";
+        final String radiusText = radiusField != null && radiusField.getText() != null
+                ? radiusField.getText().trim()
+                : "";
 
         statusLabel.setText("Aplicando filtros por facetas...");
-        runSearchInBackground(queryText, neighbourhood, minPriceText, maxPriceText, selectedFacets);
+        runSearchInBackground(queryText, neighbourhood, minPriceText, maxPriceText, 
+                ratingText, reviewsText, bedroomsText, bathroomsText,
+                amenityText, propertyTypeText, latText, lonText, radiusText, selectedFacets);
     }
 
     /**
@@ -933,14 +1926,47 @@ public class AirbnbSearchApp extends Application {
         final String queryText = simpleQueryField.getText() != null
                 ? simpleQueryField.getText().trim()
                 : "";
-        final String neighbourhood = neighbourhoodField.getText() != null
+        final String neighbourhood = neighbourhoodField != null && neighbourhoodField.getText() != null
                 ? neighbourhoodField.getText().trim().toLowerCase()
                 : "";
-        final String minPriceText = minPriceField.getText() != null ? minPriceField.getText().trim() : "";
-        final String maxPriceText = maxPriceField.getText() != null ? maxPriceField.getText().trim() : "";
+        final String minPriceText = minPriceField != null && minPriceField.getText() != null 
+                ? minPriceField.getText().trim() 
+                : "";
+        final String maxPriceText = maxPriceField != null && maxPriceField.getText() != null 
+                ? maxPriceField.getText().trim() 
+                : "";
+        final String ratingText = ratingField != null && ratingField.getText() != null
+                ? ratingField.getText().trim()
+                : "";
+        final String reviewsText = reviewsField != null && reviewsField.getText() != null
+                ? reviewsField.getText().trim()
+                : "";
+        final String bedroomsText = bedroomsField != null && bedroomsField.getText() != null
+                ? bedroomsField.getText().trim()
+                : "";
+        final String bathroomsText = bathroomsField != null && bathroomsField.getText() != null
+                ? bathroomsField.getText().trim()
+                : "";
+        final String amenityText = amenityField != null && amenityField.getText() != null
+                ? amenityField.getText().trim()
+                : "";
+        final String propertyTypeText = propertyTypeField != null && propertyTypeField.getText() != null
+                ? propertyTypeField.getText().trim()
+                : "";
+        final String latText = latField != null && latField.getText() != null
+                ? latField.getText().trim()
+                : "";
+        final String lonText = lonField != null && lonField.getText() != null
+                ? lonField.getText().trim()
+                : "";
+        final String radiusText = radiusField != null && radiusField.getText() != null
+                ? radiusField.getText().trim()
+                : "";
 
         statusLabel.setText("Filtros de facetas limpiados.");
-        runSearchInBackground(queryText, neighbourhood, minPriceText, maxPriceText, null);
+        runSearchInBackground(queryText, neighbourhood, minPriceText, maxPriceText, 
+                ratingText, reviewsText, bedroomsText, bathroomsText,
+                amenityText, propertyTypeText, latText, lonText, radiusText, null);
     }
 
     /**

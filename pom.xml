@@ -43,6 +43,13 @@
       <artifactId>lucene-queryparser</artifactId>
       <version>${lucene.version}</version>
     </dependency>
+    
+    <!-- Lucene Highlighter (para resaltar términos de búsqueda) -->
+    <dependency>
+      <groupId>org.apache.lucene</groupId>
+      <artifactId>lucene-highlighter</artifactId>
+      <version>${lucene.version}</version>
+    </dependency>
 
     <!-- JavaFX (para interfaz de escritorio sencilla)
          Nota:
