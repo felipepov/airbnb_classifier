@@ -2,4 +2,7 @@ AirbnbIndexador.class
 AirbnbIndexador$Config.class
 BusquedasLucene.class
 AirbnbIndexador$Logger.class
+AirbnbSearchApp$FacetSelection.class
 AirbnbIndexador$1.class
+AirbnbSearchApp.class
+AirbnbSearchApp$PropertyResult.class

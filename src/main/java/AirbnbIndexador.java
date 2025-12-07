@@ -333,6 +333,174 @@ public class AirbnbIndexador {
     }
 
     /**
+     * Convierte number_of_reviews a etiqueta de faceta (5 rangos).
+     * Rangos basados en análisis estadístico del CSV:
+     * - 0: Sin reseñas
+     * - 1-5: Pocas reseñas (hasta mediana)
+     * - 6-34: Algunas reseñas (hasta P75)
+     * - 35-110: Muchas reseñas (hasta P90)
+     * - 111+: Muchísimas reseñas
+     */
+    public static String getReviewsRangeLabel(int numReviews) {
+        if (numReviews == 0) {
+            return "0";
+        } else if (numReviews >= 1 && numReviews <= 5) {
+            return "1-5";
+        } else if (numReviews >= 6 && numReviews <= 34) {
+            return "6-34";
+        } else if (numReviews >= 35 && numReviews <= 110) {
+            return "35-110";
+        } else {
+            return "111+";
+        }
+    }
+
+    /**
+     * Convierte price a etiqueta de faceta (3 rangos: barato, asequible, caro).
+     * Rangos basados en análisis estadístico del CSV:
+     * - Barato: < 150 (por debajo de P25)
+     * - Asequible: 150-300 (P25 a P75)
+     * - Caro: > 300 (por encima de P75)
+     */
+    public static String getPriceRangeLabel(double price) {
+        if (price < 150) {
+            return "barato";
+        } else if (price >= 150 && price <= 300) {
+            return "asequible";
+        } else {
+            return "caro";
+        }
+    }
+
+    /**
+     * Convierte review_scores_rating a etiqueta de faceta (5 rangos basados en estrellas).
+     * Rangos basados en análisis estadístico del CSV:
+     * - 0-2: 1-2 estrellas (muy bajo, 0.5%)
+     * - 2-3: 2-3 estrellas (bajo, 0.4%)
+     * - 3-4: 3-4 estrellas (medio, 1.7%)
+     * - 4-4.5: 4 estrellas (bueno, 7.2%)
+     * - 4.5-5: 4.5-5 estrellas (excelente, 90.2%)
+     */
+    public static String getRatingRangeLabel(double rating) {
+        if (rating >= 0 && rating < 2) {
+            return "0-2";
+        } else if (rating >= 2 && rating < 3) {
+            return "2-3";
+        } else if (rating >= 3 && rating < 4) {
+            return "3-4";
+        } else if (rating >= 4 && rating < 4.5) {
+            return "4-4.5";
+        } else {
+            return "4.5-5";
+        }
+    }
+
+    /**
+     * Clasifica un property_type en una categoría principal para facetas jerárquicas.
+     * Basado en el código Python proporcionado, clasifica en categorías como:
+     * home, condo, villa, guesthouse, etc.
+     * 
+     * @param propertyType El valor original de property_type
+     * @return La categoría principal (home, condo, villa, etc.) o "other" si no coincide
+     */
+    public static String classifyPropertyType(String propertyType) {
+        if (propertyType == null || propertyType.isBlank()) {
+            return "other";
+        }
+        
+        String valueLower = propertyType.toLowerCase();
+        
+        // Orden de verificación importante: más específicos primero
+        if (valueLower.contains("rental unit")) {
+            return "rental unit";
+        } else if (valueLower.contains("condo")) {
+            return "condo";
+        } else if (valueLower.contains("guesthouse")) {
+            return "guesthouse";
+        } else if (valueLower.contains("guest suite")) {
+            return "guest suite";
+        } else if (valueLower.contains("home") || valueLower.contains("house")) {
+            return "home";
+        } else if (valueLower.contains("hotel")) {
+            return "hotel";
+        } else if (valueLower.contains("bungalow")) {
+            return "bungalow";
+        } else if (valueLower.contains("villa")) {
+            return "villa";
+        } else if (valueLower.contains("townhouse")) {
+            return "townhouse";
+        } else if (valueLower.contains("loft")) {
+            return "loft";
+        } else if (valueLower.contains("serviced apartment")) {
+            return "serviced apartment";
+        } else if (valueLower.contains("cabin")) {
+            return "cabin";
+        } else if (valueLower.contains("cottage")) {
+            return "cottage";
+        } else if (valueLower.contains("resort")) {
+            return "resort";
+        } else if (valueLower.contains("vacation home")) {
+            return "vacation home";
+        } else if (valueLower.contains("barn")) {
+            return "barn";
+        } else if (valueLower.contains("boat") || valueLower.contains("houseboat")) {
+            return "boat";
+        } else if (valueLower.contains("camper") || valueLower.contains("rv")) {
+            return "camper";
+        } else if (valueLower.contains("campsite") || valueLower.contains("tent")) {
+            return "campsite";
+        } else if (valueLower.contains("castle")) {
+            return "castle";
+        } else if (valueLower.contains("cave")) {
+            return "cave";
+        } else if (valueLower.contains("dome")) {
+            return "dome";
+        } else if (valueLower.contains("farm stay")) {
+            return "farm stay";
+        } else if (valueLower.contains("hostel")) {
+            return "hostel";
+        } else if (valueLower.contains("hut") || valueLower.contains("shepherd")) {
+            return "hut";
+        } else if (valueLower.contains("treehouse")) {
+            return "treehouse";
+        } else if (valueLower.contains("yurt")) {
+            return "yurt";
+        } else if (valueLower.contains("tiny home")) {
+            return "tiny home";
+        } else if (valueLower.contains("aparthotel")) {
+            return "aparthotel";
+        } else if (valueLower.contains("bed and breakfast")) {
+            return "bed and breakfast";
+        } else if (valueLower.contains("nature lodge")) {
+            return "nature lodge";
+        } else if (valueLower.contains("ranch")) {
+            return "ranch";
+        } else if (valueLower.contains("lighthouse")) {
+            return "lighthouse";
+        } else if (valueLower.contains("tower")) {
+            return "tower";
+        } else if (valueLower.contains("train")) {
+            return "train";
+        } else if (valueLower.contains("shipping container")) {
+            return "shipping container";
+        } else if (valueLower.contains("tipi")) {
+            return "tipi";
+        } else if (valueLower.contains("island")) {
+            return "island";
+        } else if (valueLower.contains("floor")) {
+            return "floor";
+        } else if (valueLower.contains("minsu")) {
+            return "minsu";
+        } else if (valueLower.contains("casa particular")) {
+            return "casa particular";
+        } else if (valueLower.contains("earthen home")) {
+            return "earthen home";
+        } else {
+            return "other";
+        }
+    }
+
+    /**
      * Obtiene la ruta completa del índice de propiedades
      * 
      * @param indexRoot Directorio raíz donde están los índices
@@ -372,6 +540,8 @@ public class AirbnbIndexador {
      */
     public static FacetsConfig createFacetsConfig() {
         FacetsConfig config = new FacetsConfig();
+        // Configurar property_type como jerárquico (usa "/" como separador de niveles)
+        config.setHierarchical("property_type", true);
         // Configurar campos multivaluados si es necesario
         // config.setMultiValued("amenity", true); // Ejemplo si amenity fuera faceta
         return config;
@@ -622,7 +792,7 @@ public class AirbnbIndexador {
             doc.add(new LatLonDocValuesField("location", lat, lon));
         }
 
-        // property_type (FacetField para facetado + StringField para búsqueda)
+        // property_type (FacetField jerárquico para facetado + StringField para búsqueda)
         // Normalizar a lowercase para evitar problemas de case-sensitivity con
         // KeywordAnalyzer
         String propertyType = get(cols, "property_type");
@@ -630,7 +800,15 @@ public class AirbnbIndexador {
             String propertyTypeNormalized = propertyType.trim().toLowerCase();
             // Guardar valor original para stored field
             doc.add(new StoredField("property_type_original", propertyType.trim()));
-            doc.add(new FacetField("property_type", propertyTypeNormalized));
+            
+            // Faceta jerárquica: categoría principal / valor específico
+            // Ejemplo: "home/entire home", "home/private room in home", "condo/entire condo"
+            String category = classifyPropertyType(propertyType);
+            String hierarchicalPath = category + "/" + propertyTypeNormalized;
+            doc.add(new FacetField("property_type", hierarchicalPath));
+            
+            // También mantener la faceta simple para compatibilidad
+            doc.add(new FacetField("property_type_simple", propertyTypeNormalized));
             doc.add(new StringField("property_type", propertyTypeNormalized, Field.Store.YES));
             doc.add(new SortedDocValuesField("property_type",
                     new org.apache.lucene.util.BytesRef(propertyTypeNormalized)));
@@ -646,28 +824,37 @@ public class AirbnbIndexador {
             }
         }
 
-        // price (DoublePoint, stored + docvalues)
+        // price (DoublePoint, stored + docvalues + FacetField para facetado)
         Double price = parsePrice(get(cols, "price"));
         if (price != null) {
             doc.add(new DoublePoint("price", price));
             doc.add(new StoredField("price", price));
             doc.add(new DoubleDocValuesField("price", price));
+            // Añadir faceta de rango de precio (barato, asequible, caro)
+            String priceRangeLabel = getPriceRangeLabel(price);
+            doc.add(new FacetField("price_range", priceRangeLabel));
         }
 
-        // number_of_reviews (IntPoint, stored + docvalues)
+        // number_of_reviews (IntPoint, stored + docvalues + FacetField para facetado)
         Integer numReviews = parseInteger(get(cols, "number_of_reviews"));
         if (numReviews != null) {
             doc.add(new IntPoint("number_of_reviews", numReviews));
             doc.add(new StoredField("number_of_reviews", numReviews));
             doc.add(new NumericDocValuesField("number_of_reviews", numReviews));
+            // Añadir faceta de rango de reseñas (0, 1-5, 6-34, 35-110, 111+)
+            String reviewsRangeLabel = getReviewsRangeLabel(numReviews);
+            doc.add(new FacetField("reviews_range", reviewsRangeLabel));
         }
 
-        // review_scores_rating (DoublePoint, stored + docvalues)
+        // review_scores_rating (DoublePoint, stored + docvalues + FacetField para facetado)
         Double rating = parseDouble(get(cols, "review_scores_rating"));
         if (rating != null) {
             doc.add(new DoublePoint("review_scores_rating", rating));
             doc.add(new StoredField("review_scores_rating", rating));
             doc.add(new DoubleDocValuesField("review_scores_rating", rating));
+            // Añadir faceta de rango de rating (0-2, 2-3, 3-4, 4-4.5, 4.5-5)
+            String ratingRangeLabel = getRatingRangeLabel(rating);
+            doc.add(new FacetField("rating_range", ratingRangeLabel));
         }
 
         // bathrooms (IntPoint, stored + docvalues)
