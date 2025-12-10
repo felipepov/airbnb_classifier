@@ -239,8 +239,7 @@ public class AirbnbIndexador {
 
         // Crear writers
         // IMPORTANTE: Configurar Similarity (ClassicSimilarity) en el IndexWriterConfig
-        // BM25NBClassifier usa ClassicSimilarity internamente y no se puede cambiar,
-        // por lo que usamos ClassicSimilarity para mantener consistencia
+        // Usamos ClassicSimilarity para mantener consistencia con los clasificadores
         Similarity similarity = crearSimilarity();
         
         IndexWriterConfig iwcProperties = new IndexWriterConfig(analyzer);
@@ -580,8 +579,7 @@ public class AirbnbIndexador {
 
     /**
      * Crea y devuelve la Similarity por defecto (ClassicSimilarity)
-     * BM25NBClassifier usa ClassicSimilarity internamente y no se puede cambiar,
-     * por lo que usamos ClassicSimilarity para mantener consistencia
+     * Usamos ClassicSimilarity para mantener consistencia con los clasificadores
      * 
      * @return Similarity configurada
      */
@@ -1006,9 +1004,8 @@ public class AirbnbIndexador {
         // Agregar el mega field al documento
         // Usamos TextField para que sea tokenizado y analizado (EnglishAnalyzer por
         // defecto o Standard)
-        // No lo almacenamos (Store.NO) para ahorrar espacio, ya que es solo para
-        // búsqueda
-        doc.add(new TextField("contents", contents.toString(), Field.Store.NO));
+        // IMPORTANTE: Debe estar stored (Store.YES) para que los clasificadores puedan leerlo
+        doc.add(new TextField("contents", contents.toString(), Field.Store.YES));
 
         return doc;
     }
@@ -1118,7 +1115,8 @@ public class AirbnbIndexador {
         }
 
         // Agregar el mega field al documento
-        doc.add(new TextField("contents", contents.toString(), Field.Store.NO));
+        // IMPORTANTE: Debe estar stored (Store.YES) para que los clasificadores puedan leerlo
+        doc.add(new TextField("contents", contents.toString(), Field.Store.YES));
 
         return doc;
     }

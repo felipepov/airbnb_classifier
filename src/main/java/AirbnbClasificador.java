@@ -1,5 +1,5 @@
 import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.classification.BM25NBClassifier;
+import org.apache.lucene.classification.KNearestFuzzyClassifier;
 import org.apache.lucene.classification.ClassificationResult;
 import org.apache.lucene.classification.Classifier;
 import org.apache.lucene.classification.KNearestNeighborClassifier;
@@ -31,7 +31,7 @@ import java.util.*;
  * Implementa dos tareas de clasificación usando 3 clasificadores:
  * - SimpleNaiveBayesClassifier
  * - KNearestNeighborClassifier (k=5)
- * - BM25NBClassifier
+ * - KNearestFuzzyClassifier
  * 
  * Tarea 1: Clasificación por neighbourhood_group_cleansed
  * Tarea 2: Clasificación por property_type (categorías macro)
@@ -177,7 +177,6 @@ public class AirbnbClasificador {
 
         try {
             // Reutilizar analizador y similarity de AirbnbIndexador
-            // Usa ClassicSimilarity para coincidir con BM25NBClassifier
             Analyzer analyzer = AirbnbIndexador.crearAnalizador();
             Similarity similarity = AirbnbIndexador.crearSimilarity();
 
@@ -231,13 +230,30 @@ public class AirbnbClasificador {
         // Usar DatasetSplitter de Lucene para dividir el dataset
         // Según la documentación: split(IndexReader, Directory, Directory, Directory, Analyzer, boolean, String, String...)
         IndexReader tempIndexReader = DirectoryReader.open(tempIndexDir);
+        
+        // Verificar que el índice temporal tiene el campo de clase almacenado
+        IndexSearcher tempSearcher = new IndexSearcher(tempIndexReader);
+        TopDocs sampleDocs = tempSearcher.search(new MatchAllDocsQuery(), Math.min(5, tempIndexReader.numDocs()));
+        for (ScoreDoc scoreDoc : sampleDocs.scoreDocs) {
+            Document doc = tempSearcher.storedFields().document(scoreDoc.doc);
+            String classValue = doc.get(classField);
+            if (classValue == null) {
+                System.err.println("WARNING: Campo '" + classField + "' no encontrado en documento " + scoreDoc.doc + " del índice temporal");
+                System.err.println("  Campos disponibles: " + doc.getFields().stream()
+                    .map(f -> f.name()).collect(java.util.stream.Collectors.joining(", ")));
+            }
+        }
+        
         Directory trainDir = new ByteBuffersDirectory();
         Directory testDir = new ByteBuffersDirectory();
-        Directory crossValidationDir = null; // No usamos cross-validation, solo train/test
-        DatasetSplitter splitter = new DatasetSplitter(TRAIN_SPLIT, 1.0 - TRAIN_SPLIT);
+        Directory crossValidationDir = new ByteBuffersDirectory(); // Dummy directory (no usamos cross-validation, pero no puede ser null)
+        // DatasetSplitter constructor: (testRatio, crossValidationRatio) - ratios of original index
+        // We want TRAIN_SPLIT (70%) for training, so testRatio = 1.0 - TRAIN_SPLIT (30%), crossValidationRatio = 0.0
+        DatasetSplitter splitter = new DatasetSplitter(1.0 - TRAIN_SPLIT, 0.0);
         // split requiere: IndexReader originalIndex, Directory trainingIndex, Directory testIndex, 
         // Directory crossValidationIndex, Analyzer analyzer, boolean termVectors, String classFieldName, String... fieldNames
-        splitter.split(tempIndexReader, trainDir, testDir, crossValidationDir, analyzer, false, classField, textField);
+        // Pass null for fieldNames to copy all fields (including stored fields)
+        splitter.split(tempIndexReader, trainDir, testDir, crossValidationDir, analyzer, false, classField, (String[]) null);
         tempIndexReader.close();
         
         IndexReader trainReader = DirectoryReader.open(trainDir);
@@ -267,18 +283,17 @@ public class AirbnbClasificador {
                     "KNearestNeighborClassifier");
             results.add(r2);
 
-            // 3. BM25NBClassifier
-            // NOTA: BM25NBClassifier crea su propio IndexSearcher internamente y usa la Similarity por defecto.
-            // Usamos el clasificador tal como está diseñado, sin workarounds.
-            System.out.println("\n--- BM25NBClassifier ---");
+            // 3. KNearestFuzzyClassifier
+            // Constructor: (IndexReader, Similarity, Analyzer, Query, int k, String classField, String... textFields)
+            System.out.println("\n--- KNearestFuzzyClassifier (k=" + k + ") ---");
             try {
-                BM25NBClassifier classifier3 = new BM25NBClassifier(trainReader, analyzer, new MatchAllDocsQuery(),
-                        classField, textField);
+                KNearestFuzzyClassifier classifier3 = new KNearestFuzzyClassifier(
+                        trainReader, similarity, analyzer, new MatchAllDocsQuery(), k, classField, textField);
                 EvaluationResults r3 = evaluarClasificador(classifier3, testReader, classField, textField,
-                        "BM25NBClassifier");
+                        "KNearestFuzzyClassifier");
                 results.add(r3);
             } catch (Exception e) {
-                System.err.println("Error creando BM25NBClassifier: " + e.getMessage());
+                System.err.println("Error creando KNearestFuzzyClassifier: " + e.getMessage());
                 e.printStackTrace();
             }
 
@@ -341,13 +356,30 @@ public class AirbnbClasificador {
         // Usar DatasetSplitter de Lucene para dividir el dataset
         // Según la documentación: split(IndexReader, Directory, Directory, Directory, Analyzer, boolean, String, String...)
         IndexReader tempIndexReader = DirectoryReader.open(tempIndexDir);
+        
+        // Verificar que el índice temporal tiene el campo de clase almacenado
+        IndexSearcher tempSearcher = new IndexSearcher(tempIndexReader);
+        TopDocs sampleDocs = tempSearcher.search(new MatchAllDocsQuery(), Math.min(5, tempIndexReader.numDocs()));
+        for (ScoreDoc scoreDoc : sampleDocs.scoreDocs) {
+            Document doc = tempSearcher.storedFields().document(scoreDoc.doc);
+            String classValue = doc.get(classField);
+            if (classValue == null) {
+                System.err.println("WARNING: Campo '" + classField + "' no encontrado en documento " + scoreDoc.doc + " del índice temporal");
+                System.err.println("  Campos disponibles: " + doc.getFields().stream()
+                    .map(f -> f.name()).collect(java.util.stream.Collectors.joining(", ")));
+            }
+        }
+        
         Directory trainDir = new ByteBuffersDirectory();
         Directory testDir = new ByteBuffersDirectory();
-        Directory crossValidationDir = null; // No usamos cross-validation, solo train/test
-        DatasetSplitter splitter = new DatasetSplitter(TRAIN_SPLIT, 1.0 - TRAIN_SPLIT);
+        Directory crossValidationDir = new ByteBuffersDirectory(); // Dummy directory (no usamos cross-validation, pero no puede ser null)
+        // DatasetSplitter constructor: (testRatio, crossValidationRatio) - ratios of original index
+        // We want TRAIN_SPLIT (70%) for training, so testRatio = 1.0 - TRAIN_SPLIT (30%), crossValidationRatio = 0.0
+        DatasetSplitter splitter = new DatasetSplitter(1.0 - TRAIN_SPLIT, 0.0);
         // split requiere: IndexReader originalIndex, Directory trainingIndex, Directory testIndex, 
         // Directory crossValidationIndex, Analyzer analyzer, boolean termVectors, String classFieldName, String... fieldNames
-        splitter.split(tempIndexReader, trainDir, testDir, crossValidationDir, analyzer, false, classField, textField);
+        // Pass null for fieldNames to copy all fields (including stored fields)
+        splitter.split(tempIndexReader, trainDir, testDir, crossValidationDir, analyzer, false, classField, (String[]) null);
         tempIndexReader.close();
         
         IndexReader trainReader = DirectoryReader.open(trainDir);
@@ -377,18 +409,17 @@ public class AirbnbClasificador {
                     "KNearestNeighborClassifier");
             results.add(r2);
 
-            // 3. BM25NBClassifier
-            // NOTA: BM25NBClassifier crea su propio IndexSearcher internamente y usa la Similarity por defecto.
-            // Usamos el clasificador tal como está diseñado, sin workarounds.
-            System.out.println("\n--- BM25NBClassifier ---");
+            // 3. KNearestFuzzyClassifier
+            // Constructor: (IndexReader, Similarity, Analyzer, Query, int k, String classField, String... textFields)
+            System.out.println("\n--- KNearestFuzzyClassifier (k=" + k + ") ---");
             try {
-                BM25NBClassifier classifier3 = new BM25NBClassifier(trainReader, analyzer, new MatchAllDocsQuery(),
-                        classField, textField);
+                KNearestFuzzyClassifier classifier3 = new KNearestFuzzyClassifier(
+                        trainReader, similarity, analyzer, new MatchAllDocsQuery(), k, classField, textField);
                 EvaluationResults r3 = evaluarClasificador(classifier3, testReader, classField, textField,
-                        "BM25NBClassifier");
+                        "KNearestFuzzyClassifier");
                 results.add(r3);
             } catch (Exception e) {
-                System.err.println("Error creando BM25NBClassifier: " + e.getMessage());
+                System.err.println("Error creando KNearestFuzzyClassifier: " + e.getMessage());
                 e.printStackTrace();
             }
 
@@ -425,13 +456,30 @@ public class AirbnbClasificador {
         // Usar DatasetSplitter de Lucene para dividir el dataset
         // Según la documentación: split(IndexReader, Directory, Directory, Directory, Analyzer, boolean, String, String...)
         IndexReader tempIndexReader = DirectoryReader.open(tempIndexDir);
+        
+        // Verificar que el índice temporal tiene el campo de clase almacenado
+        IndexSearcher tempSearcher = new IndexSearcher(tempIndexReader);
+        TopDocs sampleDocs = tempSearcher.search(new MatchAllDocsQuery(), Math.min(5, tempIndexReader.numDocs()));
+        for (ScoreDoc scoreDoc : sampleDocs.scoreDocs) {
+            Document doc = tempSearcher.storedFields().document(scoreDoc.doc);
+            String classValue = doc.get(classField);
+            if (classValue == null) {
+                System.err.println("WARNING: Campo '" + classField + "' no encontrado en documento " + scoreDoc.doc + " del índice temporal");
+                System.err.println("  Campos disponibles: " + doc.getFields().stream()
+                    .map(f -> f.name()).collect(java.util.stream.Collectors.joining(", ")));
+            }
+        }
+        
         Directory trainDir = new ByteBuffersDirectory();
         Directory testDir = new ByteBuffersDirectory();
-        Directory crossValidationDir = null; // No usamos cross-validation, solo train/test
-        DatasetSplitter splitter = new DatasetSplitter(TRAIN_SPLIT, 1.0 - TRAIN_SPLIT);
+        Directory crossValidationDir = new ByteBuffersDirectory(); // Dummy directory (no usamos cross-validation, pero no puede ser null)
+        // DatasetSplitter constructor: (testRatio, crossValidationRatio) - ratios of original index
+        // We want TRAIN_SPLIT (70%) for training, so testRatio = 1.0 - TRAIN_SPLIT (30%), crossValidationRatio = 0.0
+        DatasetSplitter splitter = new DatasetSplitter(1.0 - TRAIN_SPLIT, 0.0);
         // split requiere: IndexReader originalIndex, Directory trainingIndex, Directory testIndex, 
         // Directory crossValidationIndex, Analyzer analyzer, boolean termVectors, String classFieldName, String... fieldNames
-        splitter.split(tempIndexReader, trainDir, testDir, crossValidationDir, analyzer, false, classField, textField);
+        // Pass null for fieldNames to copy all fields (including stored fields)
+        splitter.split(tempIndexReader, trainDir, testDir, crossValidationDir, analyzer, false, classField, (String[]) null);
         tempIndexReader.close();
         
         IndexReader trainReader = DirectoryReader.open(trainDir);
@@ -461,18 +509,17 @@ public class AirbnbClasificador {
                     "KNearestNeighborClassifier");
             results.add(r2);
 
-            // 3. BM25NBClassifier
-            // NOTA: BM25NBClassifier crea su propio IndexSearcher internamente y usa la Similarity por defecto.
-            // Usamos el clasificador tal como está diseñado, sin workarounds.
-            System.out.println("\n--- BM25NBClassifier ---");
+            // 3. KNearestFuzzyClassifier
+            // Constructor: (IndexReader, Similarity, Analyzer, Query, int k, String classField, String... textFields)
+            System.out.println("\n--- KNearestFuzzyClassifier (k=" + k + ") ---");
             try {
-                BM25NBClassifier classifier3 = new BM25NBClassifier(trainReader, analyzer, new MatchAllDocsQuery(),
-                        classField, textField);
+                KNearestFuzzyClassifier classifier3 = new KNearestFuzzyClassifier(
+                        trainReader, similarity, analyzer, new MatchAllDocsQuery(), k, classField, textField);
                 EvaluationResults r3 = evaluarClasificador(classifier3, testReader, classField, textField,
-                        "BM25NBClassifier");
+                        "KNearestFuzzyClassifier");
                 results.add(r3);
             } catch (Exception e) {
-                System.err.println("Error creando BM25NBClassifier: " + e.getMessage());
+                System.err.println("Error creando KNearestFuzzyClassifier: " + e.getMessage());
                 e.printStackTrace();
             }
 
@@ -809,7 +856,11 @@ public class AirbnbClasificador {
                         new BytesRef(normalizedClassValue)));
             }
             
-            String contents = reconstruirContents(originalDoc);
+            // Use stored contents field if available, otherwise reconstruct
+            String contents = originalDoc.get(textField);
+            if (contents == null || contents.trim().isEmpty()) {
+                contents = reconstruirContents(originalDoc);
+            }
             newDoc.add(new org.apache.lucene.document.TextField(textField, contents,
                     org.apache.lucene.document.Field.Store.YES));
             
@@ -840,7 +891,11 @@ public class AirbnbClasificador {
             newDoc.add(new org.apache.lucene.document.SortedDocValuesField(classField,
                     new BytesRef(docWithClass.category)));
             
-            String contents = reconstruirContents(docWithClass.doc);
+            // Use stored contents field if available, otherwise reconstruct
+            String contents = docWithClass.doc.get(FIELD_CONTENTS);
+            if (contents == null || contents.trim().isEmpty()) {
+                contents = reconstruirContents(docWithClass.doc);
+            }
             newDoc.add(new org.apache.lucene.document.TextField(FIELD_CONTENTS, contents,
                     org.apache.lucene.document.Field.Store.YES));
             
@@ -881,8 +936,8 @@ public class AirbnbClasificador {
                 // Solo necesitamos asegurarnos de que esté limpio
                 String normalizedClassValue = classValue.toLowerCase().trim();
                 
-                // IMPORTANTE: No mapear los valores aquí porque el BM25NBClassifier
-                // necesita leer las clases exactamente como están en el índice original
+                // IMPORTANTE: No mapear los valores aquí porque los clasificadores
+                // necesitan leer las clases exactamente como están en el índice original
                 // El mapeo podría estar causando que el clasificador no encuentre las clases correctas
                 
                 // Agregar campo de clase como StringField y SortedDocValuesField
@@ -957,14 +1012,14 @@ public class AirbnbClasificador {
             String classField, String textField, String classifierName) throws Exception {
         EvaluationResults results = new EvaluationResults(classifierName);
 
-        // Logs de depuración para BM25NBClassifier (recopilar antes de usar ConfusionMatrixGenerator)
-        boolean isBM25NB = classifierName.contains("BM25NBClassifier");
+        // Logs de depuración para KNearestFuzzyClassifier (recopilar antes de usar ConfusionMatrixGenerator)
+        boolean isKNearestFuzzy = classifierName.contains("KNearestFuzzyClassifier");
         Map<String, Integer> predictionDistribution = new HashMap<>();
         int debugSampleCount = 0;
         int maxDebugSamples = 10;
         List<String> debugSamples = new ArrayList<>();
         
-        if (isBM25NB) {
+        if (isKNearestFuzzy) {
             // Recopilar información de debug antes de generar la matriz de confusión
             IndexSearcher searcher = new IndexSearcher(testReader);
             TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), Math.min(testReader.numDocs(), 100));
@@ -1018,9 +1073,16 @@ public class AirbnbClasificador {
         }
 
         // Usar ConfusionMatrixGenerator de Lucene
-        ConfusionMatrixGenerator.ConfusionMatrix confusionMatrix = 
-            ConfusionMatrixGenerator.getConfusionMatrix(testReader, classifier, classField, textField, 
+        ConfusionMatrixGenerator.ConfusionMatrix confusionMatrix;
+        try {
+            confusionMatrix = ConfusionMatrixGenerator.getConfusionMatrix(testReader, classifier, classField, textField, 
                 testReader.numDocs());
+        } catch (Exception e) {
+            System.err.println("Error generando matriz de confusión para " + classifierName + ": " + e.getMessage());
+            e.printStackTrace();
+            // Retornar resultados vacíos
+            return results;
+        }
 
         // Extraer métricas de la matriz de confusión
         results.accuracy = confusionMatrix.getAccuracy();
@@ -1028,6 +1090,40 @@ public class AirbnbClasificador {
         // Obtener todas las clases desde la matriz linearizada
         // La matriz es Map<actualClass, Map<predictedClass, count>>
         Map<String, Map<String, Long>> linearizedMatrix = confusionMatrix.getLinearizedMatrix();
+        
+        // Debug: verificar si la matriz está vacía o tiene problemas
+        if (linearizedMatrix.isEmpty() || results.accuracy < 0.01) {
+            System.err.println("WARNING: Problema con clasificador " + classifierName);
+            System.err.println("  - testReader.numDocs(): " + testReader.numDocs());
+            System.err.println("  - classField: " + classField);
+            System.err.println("  - textField: " + textField);
+            System.err.println("  - Accuracy: " + results.accuracy);
+            System.err.println("  - Matriz size: " + linearizedMatrix.size());
+            
+            // Verificar clases en test
+            IndexSearcher testSearcher = new IndexSearcher(testReader);
+            
+            // Obtener clases únicas en test
+            Set<String> testClasses = new HashSet<>();
+            TopDocs testDocs = testSearcher.search(new MatchAllDocsQuery(), Math.min(100, testReader.numDocs()));
+            for (ScoreDoc scoreDoc : testDocs.scoreDocs) {
+                Document doc = testSearcher.storedFields().document(scoreDoc.doc);
+                String classValue = doc.get(classField);
+                if (classValue != null) testClasses.add(classValue.toLowerCase().trim());
+            }
+            
+            System.err.println("  - Clases en test (" + testClasses.size() + "): " + testClasses);
+            
+            // Verificar muestras de documentos
+            System.err.println("  - Muestra de documentos test:");
+            for (int i = 0; i < Math.min(5, testDocs.scoreDocs.length); i++) {
+                Document doc = testSearcher.storedFields().document(testDocs.scoreDocs[i].doc);
+                String classValue = doc.get(classField);
+                String textValue = doc.get(textField);
+                System.err.println("    Doc " + testDocs.scoreDocs[i].doc + ": class='" + classValue + 
+                    "', text length=" + (textValue != null ? textValue.length() : "null"));
+            }
+        }
         Set<String> allClasses = new HashSet<>();
         for (Map<String, Long> predictedMap : linearizedMatrix.values()) {
             allClasses.addAll(predictedMap.keySet());
@@ -1100,10 +1196,10 @@ public class AirbnbClasificador {
         results.falseNegatives = totalFN;
         results.trueNegatives = totalTN;
 
-        // Logs de depuración para BM25NBClassifier
-        if (isBM25NB) {
+        // Logs de depuración para KNearestFuzzyClassifier
+        if (isKNearestFuzzy) {
             int total = testReader.numDocs();
-            System.out.println("\n  [DEBUG BM25NBClassifier] Resumen de depuración:");
+            System.out.println("\n  [DEBUG KNearestFuzzyClassifier] Resumen de depuración:");
             System.out.println("  - Total documentos clasificados: " + total);
             System.out.println("  - Distribución de predicciones:");
             for (Map.Entry<String, Integer> entry : predictionDistribution.entrySet()) {
