@@ -11,7 +11,7 @@ import org.apache.lucene.facet.FacetsConfig;
 import org.apache.lucene.facet.range.LongRange;
 import org.apache.lucene.facet.taxonomy.directory.DirectoryTaxonomyWriter;
 import org.apache.lucene.index.*;
-import org.apache.lucene.search.similarities.BM25Similarity;
+import org.apache.lucene.search.similarities.ClassicSimilarity;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
@@ -238,8 +238,14 @@ public class AirbnbIndexador {
         }
 
         // Crear writers
+        // IMPORTANTE: Configurar Similarity (ClassicSimilarity) en el IndexWriterConfig
+        // BM25NBClassifier usa ClassicSimilarity internamente y no se puede cambiar,
+        // por lo que usamos ClassicSimilarity para mantener consistencia
+        Similarity similarity = crearSimilarity();
+        
         IndexWriterConfig iwcProperties = new IndexWriterConfig(analyzer);
         iwcProperties.setOpenMode(openMode);
+        iwcProperties.setSimilarity(similarity); // Configurar ClassicSimilarity
         Directory dirProperties = FSDirectory.open(indexPathProperties);
         writerProperties = new IndexWriter(dirProperties, iwcProperties);
 
@@ -248,6 +254,7 @@ public class AirbnbIndexador {
 
         IndexWriterConfig iwcHosts = new IndexWriterConfig(analyzer);
         iwcHosts.setOpenMode(openMode);
+        iwcHosts.setSimilarity(similarity); // Configurar ClassicSimilarity
         Directory dirHosts = FSDirectory.open(indexPathHosts);
         writerHosts = new IndexWriter(dirHosts, iwcHosts);
 
@@ -305,6 +312,7 @@ public class AirbnbIndexador {
         perField.put("neighbourhood_cleansed", lowercaseKeywordAnalyzer);
         perField.put("property_type", lowercaseKeywordAnalyzer);
         perField.put("host_response_time", lowercaseKeywordAnalyzer);
+        perField.put("bedrooms_category", lowercaseKeywordAnalyzer);
 
         return new PerFieldAnalyzerWrapper(defaultAnalyzer, perField);
     }
@@ -392,6 +400,29 @@ public class AirbnbIndexador {
             return "4-4.5";
         } else {
             return "4.5-5";
+        }
+    }
+
+    /**
+     * Discretiza el número de bedrooms en categorías: "0", "1", "2", "3", "4", "5+"
+     * Para uso en clasificación (campo debe ser StringField según documentación)
+     */
+    public static String discretizarBedrooms(Integer bedrooms) {
+        if (bedrooms == null) {
+            return "0";
+        }
+        if (bedrooms == 0) {
+            return "0";
+        } else if (bedrooms == 1) {
+            return "1";
+        } else if (bedrooms == 2) {
+            return "2";
+        } else if (bedrooms == 3) {
+            return "3";
+        } else if (bedrooms == 4) {
+            return "4";
+        } else {
+            return "5+";
         }
     }
 
@@ -548,13 +579,14 @@ public class AirbnbIndexador {
     }
 
     /**
-     * Crea y devuelve la Similarity por defecto (BM25Similarity)
-     * Para garantizar consistencia entre indexación y búsqueda
+     * Crea y devuelve la Similarity por defecto (ClassicSimilarity)
+     * BM25NBClassifier usa ClassicSimilarity internamente y no se puede cambiar,
+     * por lo que usamos ClassicSimilarity para mantener consistencia
      * 
      * @return Similarity configurada
      */
     public static Similarity crearSimilarity() {
-        return new BM25Similarity();
+        return new ClassicSimilarity();
     }
 
     /**
@@ -782,6 +814,19 @@ public class AirbnbIndexador {
                     new org.apache.lucene.util.BytesRef(neighbourhoodNormalized)));
         }
 
+        // neighbourhood_group_cleansed (StringField + FacetField para clasificación)
+        // Normalizar a lowercase para consistencia
+        String neighbourhoodGroup = get(cols, "neighbourhood_group_cleansed");
+        if (neighbourhoodGroup != null && !neighbourhoodGroup.isBlank()) {
+            String neighbourhoodGroupNormalized = neighbourhoodGroup.trim().toLowerCase();
+            // Guardar valor original para stored field
+            doc.add(new StoredField("neighbourhood_group_cleansed_original", neighbourhoodGroup.trim()));
+            doc.add(new FacetField("neighbourhood_group_cleansed", neighbourhoodGroupNormalized));
+            doc.add(new StringField("neighbourhood_group_cleansed", neighbourhoodGroupNormalized, Field.Store.YES));
+            doc.add(new SortedDocValuesField("neighbourhood_group_cleansed",
+                    new org.apache.lucene.util.BytesRef(neighbourhoodGroupNormalized)));
+        }
+
         // latitude / longitude (LatLonPoint + Stored + DocValues)
         Double lat = parseDouble(get(cols, "latitude"));
         Double lon = parseDouble(get(cols, "longitude"));
@@ -875,6 +920,13 @@ public class AirbnbIndexador {
             doc.add(new IntPoint("bedrooms", bedrooms));
             doc.add(new StoredField("bedrooms", bedrooms));
             doc.add(new NumericDocValuesField("bedrooms", bedrooms));
+            
+            // bedrooms_category (StringField para clasificación - requerido por documentación)
+            // Discretizar en categorías: "0", "1", "2", "3", "4", "5+"
+            String bedroomsCategory = discretizarBedrooms(bedrooms);
+            doc.add(new StringField("bedrooms_category", bedroomsCategory, Field.Store.YES));
+            doc.add(new SortedDocValuesField("bedrooms_category",
+                    new org.apache.lucene.util.BytesRef(bedroomsCategory)));
         }
 
         // host_id (join lógico - StringField, stored + docvalues)
