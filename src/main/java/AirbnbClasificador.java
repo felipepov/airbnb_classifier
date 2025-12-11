@@ -36,6 +36,15 @@ import java.util.*;
  * Tarea 1: Clasificación por neighbourhood_group_cleansed
  * Tarea 2: Clasificación por property_type (categorías macro)
  * 
+ * NOTA SOBRE DATASETS DESBALANCEADOS:
+ * Los datasets pueden estar desbalanceados (una clase tiene muchos más ejemplos que otras).
+ * En estos casos, la accuracy puede ser engañosa. Por ejemplo, si el 99% de los ejemplos
+ * pertenecen a la clase A, un clasificador que siempre predice A tendrá 99% de accuracy
+ * pero será inútil. Por esta razón, este clasificador reporta:
+ * - Accuracy global
+ * - Precision, Recall y F1 por clase (métricas más informativas para datasets desbalanceados)
+ * - Distribución de clases en train/test
+ * 
  * COMPILACIÓN:
  * javac -cp "lucene-10.3.1/modules/*:lucene-10.3.1/modules-thirdparty/*:lib/*"
  * AirbnbClasificador.java
@@ -261,6 +270,56 @@ public class AirbnbClasificador {
         
         System.out.println("Train: " + trainReader.numDocs() + " documentos");
         System.out.println("Test: " + testReader.numDocs() + " documentos");
+        
+        // Analizar distribución de clases en train y test
+        Map<String, Integer> trainClassDist = new HashMap<>();
+        Map<String, Integer> testClassDist = new HashMap<>();
+        IndexSearcher distTrainSearcher = new IndexSearcher(trainReader);
+        IndexSearcher distTestSearcher = new IndexSearcher(testReader);
+        TopDocs allTrainDocs = distTrainSearcher.search(new MatchAllDocsQuery(), trainReader.numDocs());
+        TopDocs allTestDocs = distTestSearcher.search(new MatchAllDocsQuery(), testReader.numDocs());
+        
+        for (ScoreDoc sd : allTrainDocs.scoreDocs) {
+            Document doc = distTrainSearcher.storedFields().document(sd.doc);
+            String cls = doc.get(classField);
+            if (cls != null) {
+                cls = cls.toLowerCase().trim();
+                trainClassDist.put(cls, trainClassDist.getOrDefault(cls, 0) + 1);
+            }
+        }
+        for (ScoreDoc sd : allTestDocs.scoreDocs) {
+            Document doc = distTestSearcher.storedFields().document(sd.doc);
+            String cls = doc.get(classField);
+            if (cls != null) {
+                cls = cls.toLowerCase().trim();
+                testClassDist.put(cls, testClassDist.getOrDefault(cls, 0) + 1);
+            }
+        }
+        
+        System.out.println("\nDistribución de clases en TRAIN:");
+        for (Map.Entry<String, Integer> entry : trainClassDist.entrySet()) {
+            double pct = (double) entry.getValue() / trainReader.numDocs() * 100.0;
+            System.out.printf("  %s: %d (%.2f%%)\n", entry.getKey(), entry.getValue(), pct);
+        }
+        System.out.println("Distribución de clases en TEST:");
+        for (Map.Entry<String, Integer> entry : testClassDist.entrySet()) {
+            double pct = (double) entry.getValue() / testReader.numDocs() * 100.0;
+            System.out.printf("  %s: %d (%.2f%%)\n", entry.getKey(), entry.getValue(), pct);
+        }
+        
+        // Advertencia si el dataset está desbalanceado
+        if (testClassDist.size() > 1) {
+            int maxCount = testClassDist.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+            int minCount = testClassDist.values().stream().mapToInt(Integer::intValue).min().orElse(0);
+            if (minCount > 0 && maxCount > 0) {
+                double imbalanceRatio = (double) maxCount / minCount;
+                if (imbalanceRatio > 10.0) {
+                    System.out.println("\n⚠️  ADVERTENCIA: Dataset desbalanceado detectado (ratio máximo/mínimo: " + 
+                        String.format("%.2f", imbalanceRatio) + ")");
+                    System.out.println("   La accuracy puede ser engañosa. Se recomienda usar Precision/Recall/F1 por clase.");
+                }
+            }
+        }
 
         try {
             // Evaluar los 3 clasificadores
@@ -268,6 +327,9 @@ public class AirbnbClasificador {
 
             // 1. SimpleNaiveBayesClassifier
             System.out.println("\n--- SimpleNaiveBayesClassifier ---");
+            // NOTA: SimpleNaiveBayesClassifier puede tener problemas con datasets muy desbalanceados
+            // o con ciertos tipos de campos de clase. Si la accuracy es muy baja (< 0.01),
+            // verificar la distribución de clases y considerar usar otros clasificadores.
             SimpleNaiveBayesClassifier classifier1 = new SimpleNaiveBayesClassifier(trainReader, analyzer,
                     new MatchAllDocsQuery(), classField, textField);
             EvaluationResults r1 = evaluarClasificador(classifier1, testReader, classField, textField,
@@ -387,6 +449,56 @@ public class AirbnbClasificador {
         
         System.out.println("Train: " + trainReader.numDocs() + " documentos");
         System.out.println("Test: " + testReader.numDocs() + " documentos");
+        
+        // Analizar distribución de clases en train y test
+        Map<String, Integer> trainClassDist = new HashMap<>();
+        Map<String, Integer> testClassDist = new HashMap<>();
+        IndexSearcher distTrainSearcher = new IndexSearcher(trainReader);
+        IndexSearcher distTestSearcher = new IndexSearcher(testReader);
+        TopDocs allTrainDocs = distTrainSearcher.search(new MatchAllDocsQuery(), trainReader.numDocs());
+        TopDocs allTestDocs = distTestSearcher.search(new MatchAllDocsQuery(), testReader.numDocs());
+        
+        for (ScoreDoc sd : allTrainDocs.scoreDocs) {
+            Document doc = distTrainSearcher.storedFields().document(sd.doc);
+            String cls = doc.get(classField);
+            if (cls != null) {
+                cls = cls.toLowerCase().trim();
+                trainClassDist.put(cls, trainClassDist.getOrDefault(cls, 0) + 1);
+            }
+        }
+        for (ScoreDoc sd : allTestDocs.scoreDocs) {
+            Document doc = distTestSearcher.storedFields().document(sd.doc);
+            String cls = doc.get(classField);
+            if (cls != null) {
+                cls = cls.toLowerCase().trim();
+                testClassDist.put(cls, testClassDist.getOrDefault(cls, 0) + 1);
+            }
+        }
+        
+        System.out.println("\nDistribución de clases en TRAIN:");
+        for (Map.Entry<String, Integer> entry : trainClassDist.entrySet()) {
+            double pct = (double) entry.getValue() / trainReader.numDocs() * 100.0;
+            System.out.printf("  %s: %d (%.2f%%)\n", entry.getKey(), entry.getValue(), pct);
+        }
+        System.out.println("Distribución de clases en TEST:");
+        for (Map.Entry<String, Integer> entry : testClassDist.entrySet()) {
+            double pct = (double) entry.getValue() / testReader.numDocs() * 100.0;
+            System.out.printf("  %s: %d (%.2f%%)\n", entry.getKey(), entry.getValue(), pct);
+        }
+        
+        // Advertencia si el dataset está desbalanceado
+        if (testClassDist.size() > 1) {
+            int maxCount = testClassDist.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+            int minCount = testClassDist.values().stream().mapToInt(Integer::intValue).min().orElse(0);
+            if (minCount > 0 && maxCount > 0) {
+                double imbalanceRatio = (double) maxCount / minCount;
+                if (imbalanceRatio > 10.0) {
+                    System.out.println("\n⚠️  ADVERTENCIA: Dataset desbalanceado detectado (ratio máximo/mínimo: " + 
+                        String.format("%.2f", imbalanceRatio) + ")");
+                    System.out.println("   La accuracy puede ser engañosa. Se recomienda usar Precision/Recall/F1 por clase.");
+                }
+            }
+        }
 
         try {
             // Evaluar los 3 clasificadores
@@ -394,6 +506,9 @@ public class AirbnbClasificador {
 
             // 1. SimpleNaiveBayesClassifier
             System.out.println("\n--- SimpleNaiveBayesClassifier ---");
+            // NOTA: SimpleNaiveBayesClassifier puede tener problemas con datasets muy desbalanceados
+            // o con ciertos tipos de campos de clase. Si la accuracy es muy baja (< 0.01),
+            // verificar la distribución de clases y considerar usar otros clasificadores.
             SimpleNaiveBayesClassifier classifier1 = new SimpleNaiveBayesClassifier(trainReader, analyzer,
                     new MatchAllDocsQuery(), classField, textField);
             EvaluationResults r1 = evaluarClasificador(classifier1, testReader, classField, textField,
@@ -487,6 +602,56 @@ public class AirbnbClasificador {
         
         System.out.println("Train: " + trainReader.numDocs() + " documentos");
         System.out.println("Test: " + testReader.numDocs() + " documentos");
+        
+        // Analizar distribución de clases en train y test
+        Map<String, Integer> trainClassDist = new HashMap<>();
+        Map<String, Integer> testClassDist = new HashMap<>();
+        IndexSearcher distTrainSearcher = new IndexSearcher(trainReader);
+        IndexSearcher distTestSearcher = new IndexSearcher(testReader);
+        TopDocs allTrainDocs = distTrainSearcher.search(new MatchAllDocsQuery(), trainReader.numDocs());
+        TopDocs allTestDocs = distTestSearcher.search(new MatchAllDocsQuery(), testReader.numDocs());
+        
+        for (ScoreDoc sd : allTrainDocs.scoreDocs) {
+            Document doc = distTrainSearcher.storedFields().document(sd.doc);
+            String cls = doc.get(classField);
+            if (cls != null) {
+                cls = cls.toLowerCase().trim();
+                trainClassDist.put(cls, trainClassDist.getOrDefault(cls, 0) + 1);
+            }
+        }
+        for (ScoreDoc sd : allTestDocs.scoreDocs) {
+            Document doc = distTestSearcher.storedFields().document(sd.doc);
+            String cls = doc.get(classField);
+            if (cls != null) {
+                cls = cls.toLowerCase().trim();
+                testClassDist.put(cls, testClassDist.getOrDefault(cls, 0) + 1);
+            }
+        }
+        
+        System.out.println("\nDistribución de clases en TRAIN:");
+        for (Map.Entry<String, Integer> entry : trainClassDist.entrySet()) {
+            double pct = (double) entry.getValue() / trainReader.numDocs() * 100.0;
+            System.out.printf("  %s: %d (%.2f%%)\n", entry.getKey(), entry.getValue(), pct);
+        }
+        System.out.println("Distribución de clases en TEST:");
+        for (Map.Entry<String, Integer> entry : testClassDist.entrySet()) {
+            double pct = (double) entry.getValue() / testReader.numDocs() * 100.0;
+            System.out.printf("  %s: %d (%.2f%%)\n", entry.getKey(), entry.getValue(), pct);
+        }
+        
+        // Advertencia si el dataset está desbalanceado
+        if (testClassDist.size() > 1) {
+            int maxCount = testClassDist.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+            int minCount = testClassDist.values().stream().mapToInt(Integer::intValue).min().orElse(0);
+            if (minCount > 0 && maxCount > 0) {
+                double imbalanceRatio = (double) maxCount / minCount;
+                if (imbalanceRatio > 10.0) {
+                    System.out.println("\n⚠️  ADVERTENCIA: Dataset desbalanceado detectado (ratio máximo/mínimo: " + 
+                        String.format("%.2f", imbalanceRatio) + ")");
+                    System.out.println("   La accuracy puede ser engañosa. Se recomienda usar Precision/Recall/F1 por clase.");
+                }
+            }
+        }
 
         try {
             // Evaluar los 3 clasificadores
@@ -494,6 +659,9 @@ public class AirbnbClasificador {
 
             // 1. SimpleNaiveBayesClassifier
             System.out.println("\n--- SimpleNaiveBayesClassifier ---");
+            // NOTA: SimpleNaiveBayesClassifier puede tener problemas con datasets muy desbalanceados
+            // o con ciertos tipos de campos de clase. Si la accuracy es muy baja (< 0.01),
+            // verificar la distribución de clases y considerar usar otros clasificadores.
             SimpleNaiveBayesClassifier classifier1 = new SimpleNaiveBayesClassifier(trainReader, analyzer,
                     new MatchAllDocsQuery(), classField, textField);
             EvaluationResults r1 = evaluarClasificador(classifier1, testReader, classField, textField,
@@ -1010,6 +1178,7 @@ public class AirbnbClasificador {
      */
     private EvaluationResults evaluarClasificador(Classifier<BytesRef> classifier, IndexReader testReader,
             String classField, String textField, String classifierName) throws Exception {
+        System.out.println("  [DEBUG] evaluarClasificador called for: " + classifierName);
         EvaluationResults results = new EvaluationResults(classifierName);
 
         // Logs de depuración para KNearestFuzzyClassifier (recopilar antes de usar ConfusionMatrixGenerator)
@@ -1072,6 +1241,53 @@ public class AirbnbClasificador {
             }
         }
 
+        // Debug: Test classifier manually on a few documents first
+        System.out.println("  [DEBUG " + classifierName + "] Testing classifier manually...");
+        IndexSearcher debugSearcher = new IndexSearcher(testReader);
+        TopDocs sampleDocs = debugSearcher.search(new MatchAllDocsQuery(), Math.min(20, testReader.numDocs()));
+        
+        int debugCorrect = 0, debugTotal = 0;
+        Map<String, Integer> predictedCounts = new HashMap<>();
+        Map<String, Integer> actualCounts = new HashMap<>();
+        
+        for (ScoreDoc scoreDoc : sampleDocs.scoreDocs) {
+            Document doc = debugSearcher.storedFields().document(scoreDoc.doc);
+            String text = doc.get(textField);
+            if (text == null || text.trim().isEmpty()) {
+                text = reconstruirContents(doc);
+            }
+            String actualClass = doc.get(classField);
+            if (actualClass != null) {
+                actualClass = actualClass.toLowerCase().trim();
+                actualCounts.put(actualClass, actualCounts.getOrDefault(actualClass, 0) + 1);
+            }
+            
+            if (text != null && !text.trim().isEmpty()) {
+                try {
+                    ClassificationResult<BytesRef> result = classifier.assignClass(text);
+                    if (result != null && result.assignedClass() != null) {
+                        String predictedClass = result.assignedClass().utf8ToString().toLowerCase().trim();
+                        predictedCounts.put(predictedClass, predictedCounts.getOrDefault(predictedClass, 0) + 1);
+                        debugTotal++;
+                        if (actualClass != null && actualClass.equals(predictedClass)) {
+                            debugCorrect++;
+                        }
+                        if (debugTotal <= 10) {
+                            System.out.println("    Doc " + scoreDoc.doc + ": Real='" + actualClass + "' | Pred='" + predictedClass + "'");
+                        }
+                    } else {
+                        System.out.println("    Doc " + scoreDoc.doc + ": classifier returned null result");
+                    }
+                } catch (Exception e) {
+                    System.out.println("    Doc " + scoreDoc.doc + ": Error classifying - " + e.getMessage());
+                    if (debugTotal < 3) e.printStackTrace();
+                }
+            }
+        }
+        System.out.println("  [DEBUG " + classifierName + "] Manual test: " + debugCorrect + "/" + debugTotal + " correct");
+        System.out.println("  [DEBUG " + classifierName + "] Predicted classes: " + predictedCounts);
+        System.out.println("  [DEBUG " + classifierName + "] Actual classes: " + actualCounts);
+        
         // Usar ConfusionMatrixGenerator de Lucene
         ConfusionMatrixGenerator.ConfusionMatrix confusionMatrix;
         try {
@@ -1091,6 +1307,21 @@ public class AirbnbClasificador {
         // La matriz es Map<actualClass, Map<predictedClass, count>>
         Map<String, Map<String, Long>> linearizedMatrix = confusionMatrix.getLinearizedMatrix();
         
+        // Debug: Always print confusion matrix for SimpleNaiveBayesClassifier to diagnose issues
+        if (classifierName.contains("SimpleNaiveBayes") || classifierName.equals("SimpleNaiveBayesClassifier")) {
+            System.err.println("  [DEBUG SimpleNaiveBayes] Confusion Matrix:");
+            if (linearizedMatrix.isEmpty()) {
+                System.err.println("    [VACÍA]");
+            } else {
+                for (Map.Entry<String, Map<String, Long>> entry : linearizedMatrix.entrySet()) {
+                    System.err.println("    Actual: '" + entry.getKey() + "'");
+                    for (Map.Entry<String, Long> predEntry : entry.getValue().entrySet()) {
+                        System.err.println("      -> Predicted: '" + predEntry.getKey() + "' : " + predEntry.getValue());
+                    }
+                }
+            }
+        }
+        
         // Debug: verificar si la matriz está vacía o tiene problemas
         if (linearizedMatrix.isEmpty() || results.accuracy < 0.01) {
             System.err.println("WARNING: Problema con clasificador " + classifierName);
@@ -1099,6 +1330,18 @@ public class AirbnbClasificador {
             System.err.println("  - textField: " + textField);
             System.err.println("  - Accuracy: " + results.accuracy);
             System.err.println("  - Matriz size: " + linearizedMatrix.size());
+            System.err.println("  - Matriz completa (Actual -> Predicted):");
+            if (linearizedMatrix.isEmpty()) {
+                System.err.println("    [VACÍA - El clasificador no está prediciendo ninguna clase]");
+            } else {
+                for (Map.Entry<String, Map<String, Long>> entry : linearizedMatrix.entrySet()) {
+                    String actualClass = entry.getKey();
+                    System.err.println("    Actual: '" + actualClass + "'");
+                    for (Map.Entry<String, Long> predEntry : entry.getValue().entrySet()) {
+                        System.err.println("      -> Predicted: '" + predEntry.getKey() + "' : " + predEntry.getValue() + " documentos");
+                    }
+                }
+            }
             
             // Verificar clases en test
             IndexSearcher testSearcher = new IndexSearcher(testReader);
