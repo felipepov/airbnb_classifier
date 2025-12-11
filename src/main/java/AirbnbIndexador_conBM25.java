@@ -239,9 +239,10 @@ public class AirbnbIndexador {
 
         // Crear writers
         // IMPORTANTE: Configurar Similarity (ClassicSimilarity) en el IndexWriterConfig
-        // Usamos ClassicSimilarity para mantener consistencia con los clasificadores
+        // BM25NBClassifier usa ClassicSimilarity internamente y no se puede cambiar,
+        // por lo que usamos ClassicSimilarity para mantener consistencia
         Similarity similarity = crearSimilarity();
-
+        
         IndexWriterConfig iwcProperties = new IndexWriterConfig(analyzer);
         iwcProperties.setOpenMode(openMode);
         iwcProperties.setSimilarity(similarity); // Configurar ClassicSimilarity
@@ -309,7 +310,6 @@ public class AirbnbIndexador {
 
         // Campos categóricos (keyword + lowercase para case-insensitive)
         perField.put("neighbourhood_cleansed", lowercaseKeywordAnalyzer);
-        perField.put("neighbourhood_group_cleansed", lowercaseKeywordAnalyzer);
         perField.put("property_type", lowercaseKeywordAnalyzer);
         perField.put("host_response_time", lowercaseKeywordAnalyzer);
         perField.put("bedrooms_category", lowercaseKeywordAnalyzer);
@@ -381,8 +381,7 @@ public class AirbnbIndexador {
     }
 
     /**
-     * Convierte review_scores_rating a etiqueta de faceta (5 rangos basados en
-     * estrellas).
+     * Convierte review_scores_rating a etiqueta de faceta (5 rangos basados en estrellas).
      * Rangos basados en análisis estadístico del CSV:
      * - 0-2: 1-2 estrellas (muy bajo, 0.5%)
      * - 2-3: 2-3 estrellas (bajo, 0.4%)
@@ -428,22 +427,20 @@ public class AirbnbIndexador {
     }
 
     /**
-     * Clasifica un property_type en una categoría principal para facetas
-     * jerárquicas.
+     * Clasifica un property_type en una categoría principal para facetas jerárquicas.
      * Basado en el código Python proporcionado, clasifica en categorías como:
      * home, condo, villa, guesthouse, etc.
      * 
      * @param propertyType El valor original de property_type
-     * @return La categoría principal (home, condo, villa, etc.) o "other" si no
-     *         coincide
+     * @return La categoría principal (home, condo, villa, etc.) o "other" si no coincide
      */
     public static String classifyPropertyType(String propertyType) {
         if (propertyType == null || propertyType.isBlank()) {
             return "other";
         }
-
+        
         String valueLower = propertyType.toLowerCase();
-
+        
         // Orden de verificación importante: más específicos primero
         if (valueLower.contains("rental unit")) {
             return "rental unit";
@@ -583,7 +580,8 @@ public class AirbnbIndexador {
 
     /**
      * Crea y devuelve la Similarity por defecto (ClassicSimilarity)
-     * Usamos ClassicSimilarity para mantener consistencia con los clasificadores
+     * BM25NBClassifier usa ClassicSimilarity internamente y no se puede cambiar,
+     * por lo que usamos ClassicSimilarity para mantener consistencia
      * 
      * @return Similarity configurada
      */
@@ -839,8 +837,7 @@ public class AirbnbIndexador {
             doc.add(new LatLonDocValuesField("location", lat, lon));
         }
 
-        // property_type (FacetField jerárquico para facetado + StringField para
-        // búsqueda)
+        // property_type (FacetField jerárquico para facetado + StringField para búsqueda)
         // Normalizar a lowercase para evitar problemas de case-sensitivity con
         // KeywordAnalyzer
         String propertyType = get(cols, "property_type");
@@ -848,14 +845,13 @@ public class AirbnbIndexador {
             String propertyTypeNormalized = propertyType.trim().toLowerCase();
             // Guardar valor original para stored field
             doc.add(new StoredField("property_type_original", propertyType.trim()));
-
+            
             // Faceta jerárquica: categoría principal / valor específico
-            // Ejemplo: "home/entire home", "home/private room in home", "condo/entire
-            // condo"
+            // Ejemplo: "home/entire home", "home/private room in home", "condo/entire condo"
             String category = classifyPropertyType(propertyType);
             String hierarchicalPath = category + "/" + propertyTypeNormalized;
             doc.add(new FacetField("property_type", hierarchicalPath));
-
+            
             // También mantener la faceta simple para compatibilidad
             doc.add(new FacetField("property_type_simple", propertyTypeNormalized));
             doc.add(new StringField("property_type", propertyTypeNormalized, Field.Store.YES));
@@ -895,8 +891,7 @@ public class AirbnbIndexador {
             doc.add(new FacetField("reviews_range", reviewsRangeLabel));
         }
 
-        // review_scores_rating (DoublePoint, stored + docvalues + FacetField para
-        // facetado)
+        // review_scores_rating (DoublePoint, stored + docvalues + FacetField para facetado)
         Double rating = parseDouble(get(cols, "review_scores_rating"));
         if (rating != null) {
             doc.add(new DoublePoint("review_scores_rating", rating));
@@ -925,9 +920,8 @@ public class AirbnbIndexador {
             doc.add(new IntPoint("bedrooms", bedrooms));
             doc.add(new StoredField("bedrooms", bedrooms));
             doc.add(new NumericDocValuesField("bedrooms", bedrooms));
-
-            // bedrooms_category (StringField para clasificación - requerido por
-            // documentación)
+            
+            // bedrooms_category (StringField para clasificación - requerido por documentación)
             // Discretizar en categorías: "0", "1", "2", "3", "4", "5+"
             String bedroomsCategory = discretizarBedrooms(bedrooms);
             doc.add(new StringField("bedrooms_category", bedroomsCategory, Field.Store.YES));
@@ -1012,9 +1006,9 @@ public class AirbnbIndexador {
         // Agregar el mega field al documento
         // Usamos TextField para que sea tokenizado y analizado (EnglishAnalyzer por
         // defecto o Standard)
-        // IMPORTANTE: Debe estar stored (Store.YES) para que los clasificadores puedan
-        // leerlo
-        doc.add(new TextField("contents", contents.toString(), Field.Store.YES));
+        // No lo almacenamos (Store.NO) para ahorrar espacio, ya que es solo para
+        // búsqueda
+        doc.add(new TextField("contents", contents.toString(), Field.Store.NO));
 
         return doc;
     }
@@ -1124,9 +1118,7 @@ public class AirbnbIndexador {
         }
 
         // Agregar el mega field al documento
-        // IMPORTANTE: Debe estar stored (Store.YES) para que los clasificadores puedan
-        // leerlo
-        doc.add(new TextField("contents", contents.toString(), Field.Store.YES));
+        doc.add(new TextField("contents", contents.toString(), Field.Store.NO));
 
         return doc;
     }
@@ -1440,7 +1432,7 @@ public class AirbnbIndexador {
 
         public void debug(String msg) {
             String fullMsg = "[DEBUG] " + msg;
-            // System.out.println(fullMsg);
+            System.out.println(fullMsg);
             if (logWriter != null) {
                 logWriter.println(fullMsg);
                 logWriter.flush();
